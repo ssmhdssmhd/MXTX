@@ -317,9 +317,27 @@ app.post('/admin/api/update', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`[超级嗅探] 解析服务已启动: http://localhost:${PORT}/node.js?url=`);
-  console.log(`[超级嗅探] 管理后台: http://localhost:${PORT}/admin`);
-  console.log(`[超级嗅探] Chrome 路径: ${CHROME_PATH}`);
-  console.log(`[超级嗅探] 当前版本: v${updater.getCurrentVersion()}`);
-});
+// 带端口重试的启动逻辑：
+// 在线更新重启服务时，旧进程可能尚未完全释放端口，
+// 这里自动重试，确保新进程最终能成功监听。
+function listenWithRetry(port, retries) {
+  const server = app.listen(port);
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE' && retries > 0) {
+      console.log(`[超级嗅探] 端口 ${port} 被占用，500ms 后重试 (剩余 ${retries} 次)...`);
+      server.close();
+      setTimeout(() => listenWithRetry(port, retries - 1), 500);
+    } else {
+      console.error('[超级嗅探] 启动失败: ' + err.message);
+      process.exit(1);
+    }
+  });
+  server.on('listening', () => {
+    console.log(`[超级嗅探] 解析服务已启动: http://localhost:${PORT}/node.js?url=`);
+    console.log(`[超级嗅探] 管理后台: http://localhost:${PORT}/admin`);
+    console.log(`[超级嗅探] Chrome 路径: ${CHROME_PATH}`);
+    console.log(`[超级嗅探] 当前版本: v${updater.getCurrentVersion()}`);
+  });
+}
+
+listenWithRetry(PORT, 20);

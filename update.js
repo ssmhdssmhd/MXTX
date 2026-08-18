@@ -307,9 +307,15 @@ async function updateSource(log) {
 
 function restartServer(log) {
   log('正在重启服务...');
-  const child = spawn(process.execPath, [__filename], {
+  // 重启主服务文件（node.js），而非本模块（update.js）
+  const mainFile = path.join(ROOT_DIR, 'node.js');
+  const logFile = path.join(ROOT_DIR, 'restart.log');
+  // 以独立进程方式启动新服务，日志追加写入 restart.log。
+  // node.js 内部已实现端口占用自动重试，无需 sleep 等待。
+  const out = fs.openSync(logFile, 'a');
+  const child = spawn(process.execPath, [mainFile], {
     detached: true,
-    stdio: 'inherit'
+    stdio: ['ignore', out, out]
   });
   child.unref();
   setTimeout(() => {
