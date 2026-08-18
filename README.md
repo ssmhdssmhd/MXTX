@@ -94,9 +94,23 @@ export PLAYER_HOST="http://127.0.0.1:1314"
 ### 后台功能
 
 - **服务状态**：实时显示服务运行状态、监听端口、Chrome 版本、当前版本
+- **更新源切换**：稳定版（`main` 分支）/ 先行版（`cs1` 分支）自由切换
 - **浏览器更新**：仅更新 Chrome 浏览器，不影响源码与服务逻辑
 - **源码更新**：仅更新项目源码（`node.js`、`api.php`、`admin.html` 等），不影响浏览器
 - **一键升级**：先更新浏览器，再更新源码，全自动完成
+
+### 更新源（稳定版 / 先行版）
+
+后台支持两种更新源，用户可自由选择，更新到对应分支版本：
+
+| 更新源 | 分支 | 说明 |
+|--------|------|------|
+| 稳定版 | `main` | 稳定发布，旧包，适合生产环境 |
+| 先行版 | `cs1` | 先行体验，新包，含最新功能 |
+
+- 切换更新源后，检查更新与执行更新均基于所选分支
+- 更新源配置持久化到 `update-config.json`，重启后仍生效
+- 更新包按分支独立命名与发布：先行版资产带 `-cs1` 后缀（如 `super-sniffer-source_1.3.0-cs1.zip`）
 
 ### 更新机制
 
@@ -108,10 +122,12 @@ export PLAYER_HOST="http://127.0.0.1:1314"
 ### 更新接口
 
 ```
-GET  /admin                  # 管理后台页面
-GET  /admin/api/status       # 服务状态
-GET  /admin/api/check-update # 检查更新（对比 GitHub 最新版本）
-POST /admin/api/update       # 执行更新（body: {"type":"browser"|"source"|"all"}）
+GET  /admin                        # 管理后台页面
+GET  /admin/api/status             # 服务状态
+GET  /admin/api/update-source      # 获取当前更新源
+POST /admin/api/update-source      # 切换更新源（body: {"source":"stable"|"beta"}）
+GET  /admin/api/check-update       # 检查更新（对比所选分支最新版本）
+POST /admin/api/update             # 执行更新（body: {"type":"browser"|"source"|"all"}）
 ```
 
 ### 更新源配置

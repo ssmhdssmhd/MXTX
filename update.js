@@ -4,12 +4,18 @@
  * 功能：
  *   支持「浏览器更新」和「源码更新」两种独立更新，
  *   各自下载、解压、替换、验证、回滚，互不干扰。
+ *   支持「稳定版 / 先行版」两种更新源：
+ *     稳定版 -> main 分支（旧包，稳定发布）
+ *     先行版 -> cs1 分支（新包，先行体验）
+ *   用户可在后台自由切换更新源，更新到对应分支版本。
  *
  * 更新源：
  *   GitHub Releases（ssmhdssmhd/MXTX）
- *   资产命名约定（各更新各的）：
- *     super-sniffer-source_<version>.zip    源码包（不含浏览器）
- *     super-sniffer-browser_<version>.zip   浏览器包（仅浏览器）
+ *   资产命名约定（各更新各的，按分支区分）：
+ *     super-sniffer-source_<version>.zip      稳定版源码包（main 分支）
+ *     super-sniffer-browser_<version>.zip     稳定版浏览器包（main 分支）
+ *     super-sniffer-source_<version>-cs1.zip  先行版源码包（cs1 分支）
+ *     super-sniffer-browser_<version>-cs1.zip 先行版浏览器包（cs1 分支）
  *
  * 安全机制：
  *   更新前自动备份，更新后自动验证；
@@ -30,6 +36,17 @@ const API_BASE = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}`;
 const ROOT_DIR = __dirname;
 const BACKUP_DIR = path.join(ROOT_DIR, 'backup');
 const TMP_DIR = path.join(os.tmpdir(), 'super-sniffer-update');
+const CONFIG_FILE = path.join(ROOT_DIR, 'update-config.json');
+
+// 更新源 -> 分支映射
+const SOURCE_BRANCH = {
+  stable: 'main', // 稳定版 -> main 分支
+  beta: 'cs1'     // 先行版 -> cs1 分支
+};
+const BRANCH_SUFFIX = {
+  main: '',   // main 分支资产无后缀
+  cs1: '-cs1' // cs1 分支资产带 -cs1 后缀
+};
 
 // 源码包中包含的文件列表（用于替换，不含 node_modules 与浏览器）
 const SOURCE_FILES = [
@@ -47,6 +64,40 @@ const SOURCE_FILES = [
 ];
 
 // ========== 工具函数 ==========
+
+// 获取当前更新源（stable 稳定版 / beta 先行版），默认稳定版
+function getUpdateSource() {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    return cfg.source === 'beta' ? 'beta' : 'stable';
+  } catch (e) {
+    return 'stable';
+  }
+}
+
+// 设置更新源（持久化到 update-config.json，重启后仍生效）
+function setUpdateSource(source) {
+  if (!['stable', 'beta'].includes(source)) {
+    throw new Error('无效的更新源，仅支持 stable / beta');
+  }
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify({ source }, null, 2));
+  return source;
+}
+
+// 获取当前更新源对应的分支（main / cs1）
+function getBranch() {
+  return SOURCE_BRANCH[getUpdateSource()];
+}
+
+// 获取当前更新源信息
+function getSourceInfo() {
+  const source = getUpdateSource();
+  return {
+    source,
+    branch: SOURCE_BRANCH[source],
+    label: source === 'beta' ? '先行版' : '稳定版'
+  };
+}
 
 // 获取当前版本号（从 package.json）
 function getCurrentVersion() {
@@ -87,16 +138,38 @@ async function githubApi(url) {
   return await res.json();
 }
 
-// 获取最新 release
+// 获取当前更新源分支的最新 release
+// main 分支：tag 不含 -cs1 的最新 release
+// cs1 分支：tag 含 -cs1 的最新 release
 async function getLatestRelease() {
-  return await githubApi(`${API_BASE}/releases/latest`);
+  const branch = getBranch();
+  const releases = await githubApi(`${API_BASE}/releases?per_page=30`);
+  const filtered = releases.filter((r) => {
+    const tag = String(r.tag_name || '');
+    if (branch === 'cs1') return tag.includes('-cs1');
+    return !tag.includes('-cs1');
+  });
+  if (filtered.length === 0) {
+    throw new Error(`${branch} 分支暂无发布版本`);
+  }
+  return filtered[0];
 }
 
-// 从 release 中查找指定类型的资产
+// 从 release 中查找指定类型的资产（按当前分支匹配命名后缀）
 function findAsset(release, type) {
-  const prefix =
+  const branch = getBranch();
+  const suffix = BRANCH_SUFFIX[branch];
+  const base =
     type === 'browser' ? 'super-sniffer-browser_' : 'super-sniffer-source_';
-  return (release.assets || []).find((a) => a.name.startsWith(prefix));
+  const assets = release.assets || [];
+  if (suffix) {
+    const match = assets.find(
+      (a) => a.name.startsWith(base) && a.name.includes(suffix)
+    );
+    if (match) return match;
+  }
+  // 回退：找不到带后缀的资产时，匹配不带后缀的
+  return assets.find((a) => a.name.startsWith(base) && !a.name.includes('-cs1'));
 }
 
 // 下载文件
@@ -333,5 +406,9 @@ module.exports = {
   updateSource,
   restartServer,
   compareVersions,
-  formatSize
+  formatSize,
+  getUpdateSource,
+  setUpdateSource,
+  getBranch,
+  getSourceInfo
 };

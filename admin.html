@@ -140,6 +140,36 @@
   .status-item .label { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
   .status-item .value { font-size: 15px; font-weight: 600; }
 
+  .source-card { margin-bottom: 16px; }
+  .source-desc { font-size: 13px; color: var(--text-dim); margin-bottom: 12px; }
+  .source-btns { display: flex; gap: 12px; flex-wrap: wrap; }
+  .source-btn {
+    flex: 1;
+    min-width: 200px;
+    flex-direction: column;
+    gap: 4px;
+    padding: 14px 18px;
+    font-size: 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--card);
+    color: var(--text);
+    cursor: pointer;
+    transition: all .2s;
+  }
+  .source-btn:hover { background: var(--card-hover); border-color: var(--primary); }
+  .source-btn.active {
+    background: rgba(59,130,246,.15);
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+  .source-btn.active .source-branch { color: var(--primary); }
+  .source-btn .source-branch {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-weight: 400;
+  }
+
   .log-box {
     margin-top: 16px;
     background: #0b1220;
@@ -210,6 +240,23 @@
     </div>
   </div>
 
+  <!-- 更新源切换 -->
+  <div class="card source-card">
+    <div class="card-title">
+      <span><span class="icon">🔀</span> 更新源</span>
+      <span class="badge" id="sourceBadge">-</span>
+    </div>
+    <div class="source-desc" id="sourceDesc">选择更新源后，将获取对应分支的最新版本。</div>
+    <div class="source-btns">
+      <button class="btn btn-outline source-btn" id="btnStable" onclick="switchSource('stable')">
+        🛡️ 稳定版 <span class="source-branch">main 分支</span>
+      </button>
+      <button class="btn btn-outline source-btn" id="btnBeta" onclick="switchSource('beta')">
+        🧪 先行版 <span class="source-branch">cs1 分支</span>
+      </button>
+    </div>
+  </div>
+
   <!-- 更新区域 -->
   <div class="grid">
     <!-- 浏览器更新 -->
@@ -257,7 +304,7 @@
   <!-- 日志 -->
   <div class="log-box" id="logBox"><span class="log-time">[系统]</span> 等待操作...</div>
 
-  <div class="footer">超级嗅探 v1.2.0 · 在线更新系统</div>
+  <div class="footer">超级嗅探 v1.3.0 · 在线更新系统（稳定版 / 先行版）</div>
 </div>
 
 <script>
@@ -294,6 +341,42 @@ function setButtons(disabled) {
   }
 }
 
+// ========== 更新源 ==========
+function renderSource(source) {
+  const isBeta = source === 'beta';
+  document.getElementById('btnStable').classList.toggle('active', !isBeta);
+  document.getElementById('btnBeta').classList.toggle('active', isBeta);
+  const badge = document.getElementById('sourceBadge');
+  badge.textContent = isBeta ? '先行版 · cs1 分支' : '稳定版 · main 分支';
+  badge.className = 'badge' + (isBeta ? ' online' : '');
+  document.getElementById('sourceDesc').textContent =
+    isBeta
+      ? '当前为先行版更新源，将从 cs1 分支获取最新版本（新功能体验）。'
+      : '当前为稳定版更新源，将从 main 分支获取最新版本（稳定发布）。';
+}
+
+async function switchSource(source) {
+  if (updating) return;
+  try {
+    const res = await fetch('/admin/api/update-source', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source })
+    });
+    const data = await res.json();
+    if (data.code !== 200) {
+      log('切换更新源失败: ' + (data.msg || '未知错误'), 'err');
+      return;
+    }
+    renderSource(data.source);
+    log(`已切换到${data.label}（${data.branch} 分支）`, 'ok');
+    // 切换后重新检查更新
+    checkUpdate();
+  } catch (e) {
+    log('切换更新源失败: ' + e.message, 'err');
+  }
+}
+
 // ========== 加载状态 ==========
 async function loadStatus() {
   try {
@@ -307,6 +390,7 @@ async function loadStatus() {
     setBadge(document.getElementById('serviceBadge'), data.service === '运行中' ? '运行中' : '异常', data.service === '运行中' ? 'online' : 'offline');
     document.getElementById('browserCurrent').textContent = data.chromeVersion;
     document.getElementById('sourceCurrent').textContent = 'v' + data.version;
+    if (data.source) renderSource(data.source);
   } catch (e) {
     setBadge(document.getElementById('serviceBadge'), '离线', 'offline');
     log('无法连接后台服务: ' + e.message, 'err');
@@ -324,9 +408,10 @@ async function checkUpdate() {
     }
     latestRelease = data;
     const latestVer = data.latestVersion;
+    const branchLabel = data.branch ? `（${data.branch} 分支）` : '';
 
     // 源码
-    document.getElementById('sourceLatest').textContent = 'v' + latestVer;
+    document.getElementById('sourceLatest').textContent = 'v' + latestVer + branchLabel;
     const srcNeed = data.sourceNeedUpdate;
     setBadge(
       document.getElementById('sourceUpdateBadge'),
@@ -346,7 +431,7 @@ async function checkUpdate() {
     );
     document.getElementById('browserLatest').className = 'version-value ' + (brNeed ? 'new' : 'current');
 
-    log(`检查完成：最新版本 v${latestVer}，源码${srcNeed ? '有更新' : '已最新'}，浏览器${brNeed ? '有更新' : '已最新'}`, 'ok');
+    log(`检查完成：${data.sourceLabel || ''}最新版本 v${latestVer}${branchLabel}，源码${srcNeed ? '有更新' : '已最新'}，浏览器${brNeed ? '有更新' : '已最新'}`, 'ok');
   } catch (e) {
     log('检查更新失败: ' + e.message, 'err');
   }

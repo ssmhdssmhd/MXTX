@@ -222,6 +222,7 @@ app.get('/admin', (req, res) => {
 app.get('/admin/api/status', (req, res) => {
   const chromeVersion = updater.getChromeVersion();
   const version = updater.getCurrentVersion();
+  const sourceInfo = updater.getSourceInfo();
   res.json({
     code: 200,
     service: '运行中',
@@ -229,8 +230,29 @@ app.get('/admin/api/status', (req, res) => {
     version,
     chromeVersion,
     chromeInstalled: chromeVersion !== '未安装' && chromeVersion !== '不可用',
-    updateSource: `${updater.GITHUB_OWNER}/${updater.GITHUB_REPO}`
+    updateSource: `${updater.GITHUB_OWNER}/${updater.GITHUB_REPO}`,
+    source: sourceInfo.source,
+    branch: sourceInfo.branch,
+    sourceLabel: sourceInfo.label
   });
+});
+
+// 获取当前更新源配置
+app.get('/admin/api/update-source', (req, res) => {
+  const info = updater.getSourceInfo();
+  res.json({ code: 200, ...info });
+});
+
+// 切换更新源（stable 稳定版 / beta 先行版）
+app.post('/admin/api/update-source', (req, res) => {
+  const source = (req.body && req.body.source) || '';
+  try {
+    updater.setUpdateSource(source);
+    const info = updater.getSourceInfo();
+    res.json({ code: 200, msg: `已切换到${info.label}（${info.branch} 分支）`, ...info });
+  } catch (err) {
+    res.json({ code: 400, msg: err.message });
+  }
 });
 
 // 检查更新接口
@@ -239,6 +261,7 @@ app.get('/admin/api/check-update', async (req, res) => {
     const release = await updater.getLatestRelease();
     const latestVersion = String(release.tag_name || '').replace(/^v/, '');
     const currentVersion = updater.getCurrentVersion();
+    const sourceInfo = updater.getSourceInfo();
 
     const sourceAsset = (release.assets || []).find((a) =>
       a.name.startsWith('super-sniffer-source_')
@@ -251,6 +274,9 @@ app.get('/admin/api/check-update', async (req, res) => {
       code: 200,
       currentVersion,
       latestVersion,
+      source: sourceInfo.source,
+      branch: sourceInfo.branch,
+      sourceLabel: sourceInfo.label,
       sourceNeedUpdate: updater.compareVersions(latestVersion, currentVersion) > 0,
       sourceAsset: sourceAsset
         ? { name: sourceAsset.name, size: sourceAsset.size }
