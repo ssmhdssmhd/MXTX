@@ -14,6 +14,12 @@ chrome-linux64.zip
 *.log
 npm-debug.log*
 
+# 运行时配置（在线更新源等，由后台生成）
+update-config.json
+
+# 更新备份
+backup/
+
 # 环境变量
 .env
 .env.local
