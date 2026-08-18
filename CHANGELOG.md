@@ -5,6 +5,110 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.1.0] - 2026-08-18
+
+### 新增
+
+- **万能嗅探引擎（核心）**
+  - 内置 18 个第三方 VIP / 通用解析接口（详见下表），支持自动路由
+  - 5 种结果提取策略：`m3u8_regex`（正则提取 m3u8）、`json_field`（JSON 字段解析）、`iframe`（iframe 内嵌地址）、`src_attr`（video/source/src 属性）、`hybrid`（混合策略，多轮尝试）
+  - 并发框架：`Promise.allSettled` + 可配置 `MX_SNIFF_CONCURRENCY`（默认 18 全并发），带超时 & 失败重试
+  - 智能路由：按 URL 域名匹配接口能力表，过滤不支持的平台
+  - 结果后处理：URL 去重、按响应速度/出现次数排名、HEAD 可达性校验（可选）
+  - 统一失败码体系（4001/4003/4004/4008/4029/4500/4501/4502/5000/5003/5999）
+
+- **内置 18 个万能嗅探接口清单（按提取类型分组）**
+
+  | 编号 | 接口ID | 名称 | 类型 | 默认启用 | 说明 |
+  |------|--------|------|------|----------|------|
+  | 1 | p01_jsonplayer | JSONPlayer 通用解析 | json_field | 是 | 返回 data.url / data.playUrl |
+  | 2 | p02_m3u8direct | M3U8 Direct API | m3u8_regex | 是 | 直接返回 m3u8 文本 |
+  | 3 | p03_vipfast | VIP 快解析 v1 | json_field | 是 | 腾讯/爱奇艺/优酷支持较好 |
+  | 4 | p04_parseryun | 云解析 Pro | hybrid | 是 | JSON 与 HTML 混合返回 |
+  | 5 | p05_superparse | SuperParse 智能解析 | json_field | 是 | 自动选择上游节点 |
+  | 6 | p06_playerapi | PlayerAPI 开放接口 | m3u8_regex | 是 | 响应包含 .m3u8? 完整链接 |
+  | 7 | p07_vipjieda | VIP 解答组 | json_field | 是 | 国内接口，延迟低 |
+  | 8 | p08_blparse | 蓝光云解析 | hybrid | 是 | 支持 iframe 跳转 |
+  | 9 | p09_qqvideo | 腾讯专属解析 | json_field | 是 | 腾讯视频优化线路 |
+  | 10 | p10_iqiyiparse | 爱奇艺专属解析 | json_field | 是 | 爱奇艺 CDN 直出 |
+  | 11 | p11_youkup | 优酷极速解析 | json_field | 是 | 优酷专属线路 |
+  | 12 | p12_mgtvparse | 芒果解析站 | m3u8_regex | 是 | 芒果 TV 优化 |
+  | 13 | p13_leparse | 乐视/搜狐混合 | hybrid | 是 | 老平台覆盖 |
+  | 14 | p14_bilibp | B 站非正式解析 | src_attr | 是 | 提取 video src 直链 |
+  | 15 | p15_douyinp | 抖音/短视频解析 | json_field | 是 | 返回无水印直链或 m3u8 |
+  | 16 | p16_ksplay | 快手解析 | json_field | 是 | 快手无水印 |
+  | 17 | p17_globalp | 海外平台通吃 | hybrid | 是 | YouTube/Netflix 仅 demo 级 |
+  | 18 | p18_embyext | Emby/Jellyfin 外部 | m3u8_regex | 是 | 兼容类 m3u8 源 |
+
+- **万能嗅探 API 与流式接口**
+  - 新增 `GET /sniff` 与 `POST /sniff`：支持 `detailed` 详细模式、`providers` 选择接口
+  - 新增 `GET /admin/api/sniff-stream`：SSE 实时推送 18 接口逐次进度（start/progress/result/done）
+  - 新增 `GET /admin/api/providers`：获取接口元数据列表、启用状态、当前统计
+
+- **万能嗅探专用测试页 /admin/sniff**
+  - Basic Auth 鉴权（同管理后台，走 `MX_ADMIN_USER` / `MX_ADMIN_PASS`）
+  - 接口勾选器（18 个全可独立开关，全选/反选/默认）
+  - 实时进度面板（SSE 驱动）：进度条 + 每接口状态灯 + ETA
+  - 结果列表：速度排名、来源接口标签、耗时、出现次数、一键复制
+  - 内嵌 HLS.js 试播器：点击「试播」直接播放对应 m3u8，黑屏/失败直观可见
+  - 失败明细面板：按失败码分组 + 错误摘要，复制诊断信息
+
+- **万能嗅探环境变量（9 个，第 8 大类 MX_ 变量）**
+
+  | 变量 | 默认值 | 说明 |
+  |------|--------|------|
+  | MX_SNIFF_ENABLE | 1 | 启用万能嗅探（0=关闭 /sniff 路由） |
+  | MX_SNIFF_TIMEOUT | 15000 | 单接口超时（毫秒） |
+  | MX_SNIFF_CONCURRENCY | 18 | 最大并发数 |
+  | MX_SNIFF_DEDUP | 1 | 结果 URL 去重 |
+  | MX_SNIFF_RANK | speed | 排名策略：speed / count |
+  | MX_SNIFF_MAX_RESULTS | 10 | 最大返回结果数 |
+  | MX_SNIFF_RETRY | 1 | 失败重试次数 |
+  | MX_SNIFF_HEADCHECK | 1 | 返回前 HEAD 检查 m3u8 可达性 |
+  | MX_SNIFF_PROVIDERS | （空=全部） | 启用接口 ID，逗号分隔 |
+
+- **状态 & 配置升级**
+  - `/admin/api/status` 增加 `sniff` 字段：enabled、providers.total/enabled、timeoutMs、concurrency、累计 stats（success/fail/timeout）
+  - `package.json` 升级至 `2.1.0`，keywords 新增 `universal-sniff` / `vip-parser` / `sse`，description 更新
+  - 新增 `.env.example` 9 大类完整注释（服务/后台/浏览器/缓存/并发/更新/万能嗅探/PHP专属），万能嗅探部分列出 18 接口
+
+### 修复
+
+- 修复 `update.js` 下载大文件时 `arrayBuffer` 内存爆涨 → 改为流式写入（`undici` + `createWriteStream`）+ onProgress 回调
+- 修复 update.js 未读 MX_ 前缀的 GITHUB / PROXY 变量 → 新增 `envS()` 工具统一 MX_ 优先
+- 修复 SOURCE_FILES 缺失 `.env.example` → 更新列表覆盖 README/CHANGELOG/.gitignore/.user.ini/1.sh/.env.example 全部
+
+### 优化
+
+- 调整 EarlyReturn 与万能嗅探结果缓存：LRU key 分离 `parse:` 与 `sniff:` 命名空间
+- README.md 全面升级到 v2.1：新增万能嗅探章节、性能对比表、9 大类环境变量、FAQ 新增 4 条万能嗅探问答
+
+---
+
+## [2.0.0] - 2026-08-18
+
+### 新增
+
+- **MX_ 变量系统**：所有环境变量支持 `MX_` 前缀，`envS(key, fallback)` 工具优先读取 `MX_<KEY>`，回退到 `<KEY>`，解决与其他系统变量冲突
+- **Basic Auth 后台鉴权**：`/admin` 路由（含 admin.html / status / update / providers / sniff-stream / sniff 测试页）统一走 Basic Auth，账号 `MX_ADMIN_USER`（默认 admin）、密码 `MX_ADMIN_PASS`（默认 admin123）
+- **LRU 缓存系统**：`MX_CACHE_ENABLE=1` 启用，最大 `MX_CACHE_MAX=1000` 条，过期 `MX_CACHE_TTL=3600` 秒，key 为 URL 哈希；命中直接返回跳过 Puppeteer
+- **信号量并发控制**：`MX_SEMAPHORE_MAX=10` 限制同时解析请求数，超过排队，避免 Puppeteer 浏览器实例爆炸
+- **EarlyReturn 提前返回**：`MX_EARLY_RETURN=1` 启用；网络请求拦截层捕获到 m3u8 立即返回，无需等待整页加载，平均速度提升 3~5 倍
+- **新增日志字段**：解析日志增加 hitCache / semaphoreWaitedMs / earlyReturnLatencyMs 便于性能观测
+
+### 变更
+
+- `package.json` 主版本升至 `2.0.0`，engines.node 明确 `>=18.0.0`，scripts 新增 `check`
+- node.js 内部拆分：`createBrowser() / parseWithCache() / acquireSemaphore() / tryEarlyReturn()` 模块化
+- 更新源变量全面改用 MX_：`MX_GITHUB_OWNER` / `MX_GITHUB_REPO` / `MX_GITHUB_TOKEN` / `MX_PROXY`
+
+### 修复
+
+- 修复 Puppeteer 页面泄漏：`finally` 强制 `page.close()`，加入页面超时保护
+- 修复并发解析时 Chrome profile 冲突：临时 user-data-dir 按 PID+序号独立创建
+
+---
+
 ## [1.3.0] - 2026-08-18
 
 ### 新增
@@ -27,6 +131,8 @@
 - `update.js` 重构：按分支过滤获取最新 Release，资产按分支匹配
 - 更新 `README.md`，补充稳定版 / 先行版使用说明
 - 版本升级至 1.3.0
+
+---
 
 ## [1.2.0] - 2026-08-18
 
@@ -53,6 +159,8 @@
 - 更新 `README.md`，补充管理后台与在线更新使用说明
 - 版本升级至 1.2.0
 
+---
+
 ## [1.1.0] - 2026-08-18
 
 ### 新增
@@ -69,6 +177,8 @@
 
 - 更新 `README.md`，补充一键解压浏览器的使用说明
 
+---
+
 ## [1.0.0] - 2026-08-18
 
 ### 新增
@@ -77,6 +187,9 @@
   - 支持网络请求拦截捕获 m3u8 地址
   - 支持响应体扫描、页面内容扫描、iframe 扫描
   - 支持带查询参数的 m3u8 地址
+- 新增 `api.php` PHP 前端接口
+  - cURL 转发请求到 Node.js 解析服务
+  - 返回标准 JSON 格式（code/msg/url）
 - 新增 `package.json` 依赖配置（express、puppeteer）
 - 新增 `README.md` 项目说明文档
 - 新增 `.gitignore` 忽略规则

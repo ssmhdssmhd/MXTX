@@ -33,6 +33,9 @@ Thumbs.db
 .vscode/
 *.swp
 
+# PHP 层本地缓存（api.php 默认写在 ./.mx_cache）
+.mx_cache/
+
 # 临时文件
 tmp/
 temp/

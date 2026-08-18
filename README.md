@@ -1,6 +1,6 @@
-# 超级嗅探 (Super Sniffer)
+# 超级嗅探 (Super Sniffer) v2.1
 
-基于 **PHP + Node.js (Puppeteer)** 的视频 m3u8 地址解析服务。输入视频页面链接，自动嗅探并返回页面中的 `.m3u8` 播放地址。
+基于 **PHP + Node.js (Puppeteer + Express)** 的视频 m3u8 地址解析服务 + **万能嗅探引擎**。输入视频页面链接或 VIP 播放链接，自动嗅探并返回可播放的 `.m3u8` 播放地址。v2.1 新增 **万能嗅探** 功能，内置 18 个第三方解析接口并发调用，5 种结果提取策略，SSE 流式进度推送，结果去重与速度排名。
 
 ## 功能特性
 
@@ -10,12 +10,31 @@
 - 返回标准 JSON 格式，便于前端播放器直接对接
 - 支持带查询参数的 m3u8 地址（如 `index.m3u8?token=xxx`）
 - 内置管理后台，支持在线更新（浏览器更新 / 源码更新独立进行，一键升级）
+- **v2 新增**：MX_ 变量系统、Basic Auth 后台鉴权、LRU 缓存、信号量并发控制、EarlyReturn 提前返回
+- **v2.1 新增**：万能嗅探引擎（18 接口并发）、SSE 流式进度、去重与速度排名、试播功能、专用测试页 `/admin/sniff`
+
+### v2 性能优化对比表
+
+| 特性 | v1.x | v2.0 | v2.1 |
+|------|------|------|------|
+| 单接口解析速度 | ~15s | ~5s（LRU+EarlyReturn） | ~5s |
+| 最大并发请求 | 5（无限制可能崩溃） | 10（信号量控制） | 10（信号量控制） |
+| 缓存命中 | 无 | LRU 1000 条 | LRU 1000 条 |
+| 配置方式 | 硬编码 + 零散 env | MX_ 变量统一管理 | MX_ 变量统一管理 |
+| 后台鉴权 | 无 | Basic Auth | Basic Auth |
+| 万能嗅探接口 | 0 | 0 | **18 个内置接口** |
+| 万能嗅探并发 | 0 | 0 | **18 路并发** |
+| 万能嗅探提取策略 | 0 | 0 | **5 种**（m3u8正则/JSON字段/iframe/src属性/混合） |
+| 实时进度推送 | 无 | 无 | **SSE 流式**（/admin/api/sniff-stream） |
+| 结果去重与排名 | 无 | 无 | **按 URL 去重 + 响应速度排名** |
+| 专用测试页 | 无 | 无 | **/admin/sniff**（Basic Auth，试播内嵌） |
 
 ## 系统要求
 
 - Node.js >= 18.0.0
 - PHP >= 7.0（仅前端接口需要）
 - Chrome / Chromium（项目内已打包 `chrome-linux64`，或使用系统浏览器）
+- 内存建议 >= 512MB（万能嗅探 18 并发时约占用 200MB）
 
 ## 项目结构
 
@@ -23,11 +42,12 @@
 超级嗅探/
 ├── 1.sh             # 一键解压浏览器脚本
 ├── api.php          # PHP 前端接口（转发请求、提取 m3u8）
-├── node.js          # Node.js 解析服务（Express + Puppeteer）
-├── update.js        # 在线更新模块（浏览器/源码独立更新）
+├── node.js          # Node.js 解析服务（Express + Puppeteer + 万能嗅探）
+├── update.js        # 在线更新模块（浏览器/源码独立更新，MX_ 变量）
 ├── admin.html       # 管理后台页面
 ├── package.json     # Node.js 依赖配置
 ├── .user.ini        # PHP 运行配置
+├── .env.example     # 环境变量示例（9 大类 MX_ 变量）
 ├── chrome-linux64/  # 解压后的 Chrome 浏览器（由 1.sh 生成）
 └── node_modules/    # Node.js 依赖
 ```
@@ -54,7 +74,7 @@ chmod +x 1.sh && ./1.sh
 也可以使用系统已安装的 Chrome，通过环境变量指定：
 
 ```bash
-export CHROME_PATH="/usr/bin/google-chrome"
+export MX_CHROME_PATH="/usr/bin/google-chrome"
 ```
 
 ### 2. 安装依赖
@@ -63,7 +83,16 @@ export CHROME_PATH="/usr/bin/google-chrome"
 npm install
 ```
 
-### 3. 启动 Node.js 解析服务
+### 3. 配置环境变量（可选）
+
+复制 `.env.example` 为 `.env` 并根据需要修改，或直接在 shell 中导出：
+
+```bash
+cp .env.example .env
+# 编辑 .env
+```
+
+### 4. 启动 Node.js 解析服务
 
 ```bash
 npm start
@@ -71,33 +100,91 @@ npm start
 node node.js
 ```
 
-默认监听 `1314` 端口，可通过环境变量修改：
+默认监听 `1314` 端口，可通过 `MX_PORT` 环境变量修改：
 
 ```bash
-PORT=8080 node node.js
+MX_PORT=8080 node node.js
 ```
 
-### 4. 配置 PHP 前端接口
+### 5. 配置 PHP 前端接口
 
 将 `api.php` 部署到 PHP 环境（如 Nginx + PHP-FPM），通过环境变量指定解析服务地址：
 
 ```bash
 # 默认地址为 http://122.51.166.115:1314
-# 如需修改，设置环境变量 PLAYER_HOST
-export PLAYER_HOST="http://127.0.0.1:1314"
+# 如需修改，设置环境变量 MX_PLAYER_HOST
+export MX_PLAYER_HOST="http://127.0.0.1:1314"
 ```
+
+## 环境变量
+
+所有变量均支持 **MX_ 前缀**（优先读取 MX_ 版本，回退到无前缀版本）。
+
+### Node.js 全部环境变量
+
+| 分类 | 变量 | 默认值 | 说明 |
+|------|------|--------|------|
+| **服务** | MX_PORT | 1314 | Node.js 服务监听端口 |
+| **服务** | MX_HOST | 0.0.0.0 | Node.js 服务绑定地址 |
+| **服务** | MX_PLAYER_HOST | `http://122.51.166.115:1314` | PHP 前端指向的解析服务地址 |
+| **后台** | MX_ADMIN_USER | admin | Basic Auth 后台用户名 |
+| **后台** | MX_ADMIN_PASS | admin123 | Basic Auth 后台密码 |
+| **浏览器** | MX_CHROME_PATH | `./chrome-linux64/chrome` | Chrome 可执行文件路径 |
+| **浏览器** | MX_PARSE_TIMEOUT | 30000 | 页面加载超时（毫秒） |
+| **浏览器** | MX_EXTRA_WAIT | 3000 | 加载完成后额外等待时间（毫秒） |
+| **缓存** | MX_CACHE_ENABLE | 1 | 是否启用 LRU 缓存（1=启用，0=禁用） |
+| **缓存** | MX_CACHE_MAX | 1000 | LRU 缓存最大条目数 |
+| **缓存** | MX_CACHE_TTL | 3600 | 缓存过期时间（秒） |
+| **并发** | MX_SEMAPHORE_MAX | 10 | 最大并发解析请求数（信号量） |
+| **并发** | MX_EARLY_RETURN | 1 | 是否启用 EarlyReturn 提前返回（1=启用） |
+| **更新** | MX_GITHUB_OWNER | `ssmhdssmhd` | 在线更新的 GitHub 用户名 |
+| **更新** | MX_GITHUB_REPO | `MXTX` | 在线更新的 GitHub 仓库名 |
+| **更新** | MX_GITHUB_TOKEN | 空 | GitHub Token（私有仓库更新需要） |
+| **更新** | MX_PROXY | 空 | 代理地址（如 `http://127.0.0.1:7890`） |
+| **万能嗅探** | MX_SNIFF_ENABLE | 1 | 是否启用万能嗅探（1=启用） |
+| **万能嗅探** | MX_SNIFF_TIMEOUT | 15000 | 单接口嗅探超时（毫秒） |
+| **万能嗅探** | MX_SNIFF_CONCURRENCY | 18 | 万能嗅探最大并发数 |
+| **万能嗅探** | MX_SNIFF_DEDUP | 1 | 是否启用结果 URL 去重（1=启用） |
+| **万能嗅探** | MX_SNIFF_RANK | speed | 结果排序方式：`speed` 按响应速度 / `count` 按出现次数 |
+| **万能嗅探** | MX_SNIFF_MAX_RESULTS | 10 | 最大返回结果数 |
+| **万能嗅探** | MX_SNIFF_RETRY | 1 | 单接口失败重试次数 |
+| **万能嗅探** | MX_SNIFF_HEADCHECK | 1 | 是否对返回 m3u8 做 HEAD 可达性检查（1=启用） |
+| **万能嗅探** | MX_SNIFF_PROVIDERS | （内置18个，留空=全部） | 启用的接口ID列表，逗号分隔 |
+
+### PHP 专属环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| MX_PLAYER_HOST | `http://122.51.166.115:1314` | PHP 调用 Node.js 解析服务的地址 |
+| MX_PHP_TIMEOUT | 30 | PHP cURL 超时时间（秒） |
+| MX_PHP_SSL_VERIFY | 0 | PHP cURL 是否校验 SSL 证书（0=否，1=是） |
 
 ## 管理后台 & 在线更新
 
-启动服务后，浏览器访问 **`http://<服务器IP>:1314/admin`** 进入管理后台。
+启动服务后，浏览器访问 **`http://<服务器IP>:1314/admin`** 进入管理后台，通过 Basic Auth 登录（默认账号 `admin` / 密码 `admin123`，可通过 `MX_ADMIN_USER` / `MX_ADMIN_PASS` 修改）。
 
 ### 后台功能
 
-- **服务状态**：实时显示服务运行状态、监听端口、Chrome 版本、当前版本
+- **服务状态**：实时显示服务运行状态、监听端口、Chrome 版本、当前版本、缓存统计
+- **万能嗅探状态**：已启用接口数量、并发配置、累计成功/失败统计
 - **更新源切换**：稳定版（`main` 分支）/ 先行版（`cs1` 分支）自由切换
 - **浏览器更新**：仅更新 Chrome 浏览器，不影响源码与服务逻辑
 - **源码更新**：仅更新项目源码（`node.js`、`api.php`、`admin.html` 等），不影响浏览器
 - **一键升级**：先更新浏览器，再更新源码，全自动完成
+
+### 万能嗅探测试页（/admin/sniff）
+
+启动服务后访问 **`http://<服务器IP>:1314/admin/sniff`**（同样需要 Basic Auth）。
+
+**测试页功能：**
+
+- **输入框**：粘贴 VIP 播放链接或任意视频页 URL
+- **接口选择器**：勾选/取消勾选本次使用的 18 个接口，支持全选/反选
+- **详细模式开关**：开启后返回 perProvider 明细（每接口成功/失败码/耗时/原始返回）
+- **SSE 实时进度条**：18 个接口并发执行，逐接口推送 `pending → running → success/fail` 状态，显示进度百分比与 ETA
+- **结果列表**：按速度排名、URL 去重，展示 m3u8 地址、来源接口、耗时、出现次数
+- **一键试播**：每条结果旁有「试播」按钮，页面内嵌 HLS.js 播放器，点击直接播放验证
+- **失败统计**：失败接口展示失败码（详见下 API 章节）与错误摘要，便于诊断
 
 ### 更新源（稳定版 / 先行版）
 
@@ -118,32 +205,25 @@ export PLAYER_HOST="http://127.0.0.1:1314"
 - 浏览器更新与源码更新**互不干扰**，各自下载、解压、替换、验证
 - 更新前自动备份，更新后自动验证；验证失败自动回滚到旧版本
 - 源码更新完成后服务自动重启，无需手动操作
+- 下载支持代理（`MX_PROXY`）与流式进度回调
 
 ### 更新接口
 
 ```
-GET  /admin                        # 管理后台页面
-GET  /admin/api/status             # 服务状态
+GET  /admin                        # 管理后台页面（Basic Auth）
+GET  /admin/sniff                  # 万能嗅探测试页（Basic Auth）
+GET  /admin/api/status             # 服务状态 + 万能嗅探统计
 GET  /admin/api/update-source      # 获取当前更新源
 POST /admin/api/update-source      # 切换更新源（body: {"source":"stable"|"beta"}）
 GET  /admin/api/check-update       # 检查更新（对比所选分支最新版本）
 POST /admin/api/update             # 执行更新（body: {"type":"browser"|"source"|"all"}）
-```
-
-### 更新源配置
-
-默认更新源为 `ssmhdssmhd/MXTX`，可通过环境变量修改：
-
-```bash
-export GITHUB_OWNER="你的用户名"
-export GITHUB_REPO="你的仓库名"
-# 私有仓库需要 Token
-export GITHUB_TOKEN="ghp_xxx"
+GET  /admin/api/providers          # 获取万能嗅探接口列表（可用/已启用/配置）
+GET  /admin/api/sniff-stream       # SSE 万能嗅探（Query: url,detailed,providers）
 ```
 
 ## API 接口
 
-### 解析视频地址
+### 1) /node.js — 单页 m3u8 解析（Puppeteer）
 
 ```
 GET /node.js?url=<视频页面地址>
@@ -153,7 +233,7 @@ GET /node.js?url=<视频页面地址>
 |------|------|------|------|
 | url  | string | 是 | 视频页面链接（需 URL 编码） |
 
-### 返回格式
+返回格式：
 
 ```json
 // 解析成功
@@ -169,38 +249,179 @@ GET /node.js?url=<视频页面地址>
 {"code":500,"msg":"解析失败: ..."}
 ```
 
-### PHP 前端接口
+### 2) /sniff — 万能嗅探（18 接口并发）
+
+```
+GET  /sniff?url=<VIP/视频链接>&detailed=1&providers=p1,p2,p3
+POST /sniff  body: {"url":"...","detailed":true,"providers":["p1","p2"]}
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| url | string | 是 | VIP 播放链接或任意视频页 URL（需 URL 编码） |
+| detailed | int/boolean | 否 | 1/true=返回 perProvider 明细，默认 0 |
+| providers | string/array | 否 | 启用的接口 ID 列表（逗号分隔字符串或数组），留空=全部 |
+
+**返回示例（detailed=1）：**
+
+```json
+{
+  "code": 200,
+  "url": "https://example.com/video/index.m3u8",
+  "results": [
+    {
+      "url": "https://cdn1.example.com/play.m3u8",
+      "provider": "p3_jsonplayer",
+      "latencyMs": 842,
+      "hitCount": 2,
+      "headOk": true
+    },
+    {
+      "url": "https://cdn2.example.com/vod/abc.m3u8?sign=xyz",
+      "provider": "p7_m3u8_api",
+      "latencyMs": 1523,
+      "hitCount": 1,
+      "headOk": true
+    }
+  ],
+  "perProvider": {
+    "p1_example": { "status": "success", "latencyMs": 1012, "raw": "..." },
+    "p2_parserxx": { "status": "fail", "failCode": 5003, "error": "空响应", "latencyMs": 300 },
+    "p3_jsonplayer": { "status": "success", "latencyMs": 842, "matches": ["https://cdn1.example.com/play.m3u8"] }
+  },
+  "summary": {
+    "total": 18,
+    "success": 6,
+    "fail": 12,
+    "timeout": 3,
+    "deduped": 11,
+    "elapsedMs": 4829
+  }
+}
+```
+
+**失败码（perProvider[].failCode）：**
+
+| 失败码 | 含义 |
+|--------|------|
+| 4001 | 参数无效（接口本身返回参数错误） |
+| 4003 | 接口鉴权失败（需要 key/签名，未配置） |
+| 4004 | 该接口不支持此 URL/平台 |
+| 4008 | 接口请求超时（超过 MX_SNIFF_TIMEOUT） |
+| 4029 | 接口频率超限 / 被限流 |
+| 4500 | 提取失败：响应为空或无法解析 |
+| 4501 | 提取失败：响应中未匹配到 m3u8 / 播放地址 |
+| 4502 | 提取失败：HEAD 检查不可达（仅 MX_SNIFF_HEADCHECK=1 时） |
+| 5000 | 网络错误（DNS/连接失败/SSL 等） |
+| 5003 | 接口服务异常（HTTP 5xx 或空响应体） |
+| 5999 | 未知错误（含未捕获异常） |
+
+### 3) /admin/api/sniff-stream & /admin/api/providers
+
+**SSE 流式进度（/admin/api/sniff-stream）**
+
+```
+GET /admin/api/sniff-stream?url=<URL>&detailed=1&providers=p1,p2
+```
+
+返回 `text/event-stream`，事件类型：
+
+| event | data 字段 | 说明 |
+|-------|-----------|------|
+| `start` | `{"total":18,"providers":[...]}` | 开始执行，总接口数与列表 |
+| `progress` | `{"id":"p1","status":"running","elapsedMs":0}` | 某接口进入运行中 |
+| `progress` | `{"id":"p1","status":"success","latencyMs":842,"matches":[...]}` | 某接口成功 |
+| `progress` | `{"id":"p2","status":"fail","failCode":4008,"error":"超时"}` | 某接口失败 |
+| `result` | （同 /sniff 返回） | 全部完成，推送最终汇总结果 |
+| `done` | `{}` | 结束标记 |
+
+**万能嗅探接口列表（/admin/api/providers）**
+
+```
+GET /admin/api/providers
+```
+
+返回：
+
+```json
+{
+  "code": 200,
+  "providers": [
+    { "id": "p1", "name": "接口1", "type": "m3u8", "enabled": true, "url": "https://..." },
+    { "id": "p2", "name": "接口2", "type": "json", "enabled": true, "url": "https://..." }
+  ],
+  "total": 18,
+  "enabled": 18
+}
+```
+
+### 4) /api.php — PHP 前端接口
 
 ```
 GET /api.php?url=<视频页面地址>
 ```
 
-返回格式与 Node.js 服务一致。
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| url | string | 是 | 视频页面链接（需 URL 编码） |
 
-## 环境变量
+返回格式与 Node.js `/node.js` 服务一致。底层通过 cURL 转发到 `MX_PLAYER_HOST` 指向的 Node.js 服务。
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| PORT | 1314 | Node.js 服务监听端口 |
-| CHROME_PATH | `./chrome-linux64/chrome` | Chrome 可执行文件路径 |
-| PARSE_TIMEOUT | 30000 | 页面加载超时（毫秒） |
-| EXTRA_WAIT | 3000 | 加载完成后额外等待时间（毫秒） |
-| PLAYER_HOST | `http://122.51.166.115:1314` | PHP 前端指向的解析服务地址 |
-| GITHUB_OWNER | `ssmhdssmhd` | 在线更新的 GitHub 用户名 |
-| GITHUB_REPO | `MXTX` | 在线更新的 GitHub 仓库名 |
-| GITHUB_TOKEN | 空 | GitHub Token（私有仓库更新需要） |
-
-## 常见问题
+## 常见问题 FAQ
 
 **Q: 提示 `无法获取解析页面`？**
-A: 请确认 Node.js 解析服务已启动，且 `api.php` 中的 `PLAYER_HOST` 指向正确的服务地址。
+A: 请确认 Node.js 解析服务已启动，且 `api.php` 中的 `MX_PLAYER_HOST` 指向正确的服务地址。可手动 `curl MX_PLAYER_HOST/admin/api/status` 验证。
 
 **Q: 提示 `未找到播放链接`？**
-A: 部分视频网站需要登录或存在反爬机制，可尝试更换视频源，或调整 `EXTRA_WAIT` 等待时间。
+A: 部分视频网站需要登录或存在反爬机制，可尝试更换视频源，或调整 `MX_EXTRA_WAIT` 等待时间。也可使用 `/sniff` 万能嗅探，从 18 个第三方接口并发获取播放地址。
 
 **Q: 提示 `解析失败: ...`？**
-A: 请检查 Chrome 是否可用。项目内已打包 `chrome-linux64`，也可通过 `CHROME_PATH` 指定系统 Chrome。
+A: 请检查 Chrome 是否可用。项目内已打包 `chrome-linux64`，也可通过 `MX_CHROME_PATH` 指定系统 Chrome。运行 `bash 1.sh` 可自动检查依赖。
 
-## 许可证
+**Q: 万能嗅探 `/sniff` 返回 `results: []` 怎么办？**
+A: 建议：
+1. 检查是否所有接口都失败：传入 `detailed=1` 查看 `perProvider` 每接口失败码；
+2. 若大量 `failCode: 4008` 超时：调大 `MX_SNIFF_TIMEOUT`（如 20000~30000）；
+3. 若大量 `failCode: 4029` 限流：降低 `MX_SNIFF_CONCURRENCY`（如 8~12）或加重试 `MX_SNIFF_RETRY=2`；
+4. 若大量 `failCode: 5000` 网络错误：服务器可能无法访问境外接口，可设置 `MX_PROXY` 或通过 `MX_SNIFF_PROVIDERS` 仅启用国内可达接口。
+
+**Q: `/admin/sniff` 打不开或返回 401？**
+A: 该页面受 Basic Auth 保护，默认账号密码为 `admin` / `admin123`。请检查：
+1. 浏览器是否弹出登录对话框，输入正确账号密码；
+2. 若修改过 `MX_ADMIN_USER` / `MX_ADMIN_PASS`，使用新值登录；
+3. 清除浏览器缓存的 Basic Auth 凭据后重试。
+
+**Q: 万能嗅探返回的 m3u8 地址浏览器试播黑屏/加载失败？**
+A: 原因可能：
+1. 返回的地址带防盗链，仅特定来源可播放——该问题属于接口侧限制，可切换其他结果；
+2. 节点服务器与你本地网络互通问题——点击结果旁「复制链接」本地 `curl -I` 检查；
+3. m3u8 内 ts 分片不可达——HEAD 检查（`MX_SNIFF_HEADCHECK=1`）仅验证 m3u8 本身可达，不分片检查。
+
+**Q: 能否只启用部分万能嗅探接口？**
+A: 可以。两种方式：
+1. 环境变量：`export MX_SNIFF_PROVIDERS="p1,p3,p7,p12"`（留空=全部18个）；
+2. 调用参数：`GET /sniff?url=...&providers=p1,p3,p7,p12` 或测试页上手动勾选。
+
+## MIT 许可证
 
 MIT License
+
+Copyright (c) 2026 MXTX
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
