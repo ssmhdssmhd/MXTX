@@ -36,6 +36,11 @@ Thumbs.db
 # PHP 层本地缓存（api.php 默认写在 ./.mx_cache）
 .mx_cache/
 
+# Trae 浏览器调试截图与共享包临时产物
+.trae-html-share-packages/*.png
+.trae-html-share-packages/*.jpg
+.trae-html-share-packages/*.jpeg
+
 # 临时文件
 tmp/
 temp/

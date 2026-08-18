@@ -959,9 +959,10 @@ a.link:hover { text-decoration: underline; }
   </div>
 </div>
 <script>
+function abs(path) { return location.origin + path; }
 async function loadStatus() {
   try {
-    const r = await fetch('/admin/api/status').then(r => r.json());
+    const r = await fetch(abs('/admin/api/status')).then(r => r.json());
     document.getElementById('statusService').textContent = r.service;
     document.getElementById('statusService').className = 'value ' + (r.service === '运行中' ? 'ok' : 'err');
     document.getElementById('statusPort').textContent = r.port;
@@ -977,7 +978,7 @@ async function loadStatus() {
 }
 async function loadProviders() {
   try {
-    const r = await fetch('/admin/api/providers').then(r => r.json());
+    const r = await fetch(abs('/admin/api/providers')).then(r => r.json());
     const list = r.providers || [];
     document.getElementById('provCount').textContent = list.length;
     document.getElementById('provList').innerHTML = list.map((p, i) => '<tr><td>' + (i+1) + '</td><td><code>' + p + '</code></td></tr>').join('');
@@ -990,7 +991,7 @@ async function doParse() {
   box.textContent = '正在解析，请稍候...';
   try {
     const start = Date.now();
-    const r = await fetch('/node.js?url=' + encodeURIComponent(url)).then(r => r.json());
+    const r = await fetch(abs('/node.js?url=' + encodeURIComponent(url))).then(r => r.json());
     const dt = Date.now() - start;
     let html = '';
     html += '状态码: ' + r.code + '  耗时: ' + dt + 'ms\\n\\n';
@@ -1158,6 +1159,7 @@ video { width: 100%; max-height: 500px; background: #000; display: block; }
   </div>
 </div>
 <script>
+function abs(path) { return location.origin + path; }
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});
 }
@@ -1281,7 +1283,7 @@ function startSniff() {
 
   const urlParams = new URLSearchParams();
   urlParams.set('url', url);
-  const endpoint = '/admin/api/sniff-stream?' + urlParams.toString();
+  const endpoint = abs('/admin/api/sniff-stream?' + urlParams.toString());
 
   eventSource = new EventSource(endpoint);
 

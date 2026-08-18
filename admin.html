@@ -309,6 +309,13 @@
 </div>
 
 <script>
+// ========== 通用工具 ==========
+// 把相对 URL 转成绝对路径（location.origin 不含 user:pass，避免浏览器
+// "Request cannot be constructed from a URL that includes credentials" 错误）
+function abs(path) {
+  return location.origin + path;
+}
+
 // ========== 状态管理 ==========
 let updating = false;
 let latestRelease = null;
@@ -359,7 +366,7 @@ function renderSource(source) {
 async function switchSource(source) {
   if (updating) return;
   try {
-    const res = await fetch('/admin/api/update-source', {
+    const res = await fetch(abs('/admin/api/update-source'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ source })
@@ -381,7 +388,7 @@ async function switchSource(source) {
 // ========== 加载状态 ==========
 async function loadStatus() {
   try {
-    const res = await fetch('/admin/api/status');
+    const res = await fetch(abs('/admin/api/status'));
     const data = await res.json();
     document.getElementById('stService').textContent = data.service;
     document.getElementById('stPort').textContent = data.port;
@@ -401,7 +408,7 @@ async function loadStatus() {
 // ========== 检查更新 ==========
 async function checkUpdate() {
   try {
-    const res = await fetch('/admin/api/check-update');
+    const res = await fetch(abs('/admin/api/check-update'));
     const data = await res.json();
     if (data.code !== 200) {
       log('检查更新失败: ' + (data.msg || '未知错误'), 'warn');
@@ -445,7 +452,7 @@ async function doUpdate(type) {
   log('========== 开始更新 ==========', 'info');
 
   try {
-    const res = await fetch('/admin/api/update', {
+    const res = await fetch(abs('/admin/api/update'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type })
