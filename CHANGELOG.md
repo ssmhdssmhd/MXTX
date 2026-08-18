@@ -1,0 +1,27 @@
+# 更新日志 (Changelog)
+
+本项目所有重要变更都会记录在此文件中。
+
+格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
+版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+## [1.0.0] - 2026-08-18
+
+### 新增
+
+- 新增 `node.js` Node.js 解析服务（Express + Puppeteer）
+  - 支持网络请求拦截捕获 m3u8 地址
+  - 支持响应体扫描、页面内容扫描、iframe 扫描
+  - 支持带查询参数的 m3u8 地址
+- 新增 `package.json` 依赖配置（express、puppeteer）
+- 新增 `README.md` 项目说明文档
+- 新增 `.gitignore` 忽略规则
+
+### 优化
+
+- 优化 `api.php` 前端接口
+  - 增加 URL 格式校验
+  - 改进 m3u8 正则，支持带查询参数的完整地址
+  - 增加 cURL 连接超时与 SSL 校验配置
+  - 支持通过环境变量 `PLAYER_HOST` 配置解析服务地址
+  - 解析失败时返回解析服务的具体错误信息

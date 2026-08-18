@@ -1,0 +1,26 @@
+# 依赖
+node_modules/
+
+# Chrome 浏览器（体积较大，从 chrome-linux64.tar.xz 解压）
+chrome-linux64/
+
+# 日志
+*.log
+npm-debug.log*
+
+# 环境变量
+.env
+.env.local
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+
+# 临时文件
+tmp/
+temp/

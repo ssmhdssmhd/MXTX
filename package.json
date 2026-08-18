@@ -1,0 +1,26 @@
+{
+  "name": "super-sniffer",
+  "version": "1.0.0",
+  "description": "超级嗅探 - 基于 Puppeteer 的视频 m3u8 地址解析服务（PHP + Node.js）",
+  "main": "node.js",
+  "scripts": {
+    "start": "node node.js",
+    "dev": "node node.js"
+  },
+  "keywords": [
+    "m3u8",
+    "video",
+    "parser",
+    "puppeteer",
+    "sniffer"
+  ],
+  "author": "MXTX",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "puppeteer": "^23.11.1"
+  }
+}
