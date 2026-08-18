@@ -7,6 +7,72 @@
 
 ---
 
+## [2.1.0] - 2026-08-18
+
+> 🎉 **万能嗅探大版本**：内置 18 个第三方 VIP 解析接口，多线程并发请求，
+> 多种策略（3xx 跳转 / JSON 递归 / HTML 正则 / <video><iframe> 属性 / JSONP）
+> 组合提取 m3u8/mp4/flv/ts 等视频地址，自动去重 + 按画质排序，多路返回；
+> 后台新增「万能嗅探测试页」实时 SSE 流式进度，支持一键试播。
+
+### 新增
+
+#### 🔧 万能嗅探 MX 环境变量（第八类，10+ 项）
+| 变量名 | 默认 | 说明 |
+|--------|------|------|
+| `MX_UNIVERSAL_ENABLE` | `true` | 是否启用万能嗅探模块（对外 `/sniff` + 后台 `/admin/sniff`） |
+| `MX_UNIVERSAL_TIMEOUT` | `12000` | 单第三方接口请求超时（毫秒） |
+| `MX_UNIVERSAL_CONCURRENCY` | `6` | 同时请求第三方接口数（6 路并发） |
+| `MX_UNIVERSAL_TTL` | `1800` | 万能嗅探 LRU TTL（秒） |
+| `MX_UNIVERSAL_CACHE_MAX` | `200` | 万能嗅探最大缓存条目 |
+| `MX_UNIVERSAL_MAX_RESULTS` | `12` | 去重后最多返回播放地址数 |
+| `MX_UNIVERSAL_EARLY_HITS` | `0` | 命中 N 条唯一地址就提前返回（0=等全部完成） |
+| `MX_UNIVERSAL_PROVIDERS_JSON` | 空 | 自定义第三方接口列表（JSON 数组字符串），可覆盖内置 |
+| `MX_UNIVERSAL_PROXY` | 空 | 万能嗅探请求代理（默认复用 `MX_PROXY`） |
+
+**内置 18 个第三方解析接口（全 MX_ 管理）：**
+jx.xmflv.cc、jx.xmflv.com、im1907.top、yparse.ik9.cc、www.ckplayer.vip、jiexi.789jiexi.icu:4433、www.8090g.cn、www.pangujiexi.com、jx.m3u8.tv、www.playm3u8.cn、json.ovvo.pro、api.qianqi.net、jx.yparse.com、www.yemu.xyz、jx.yangtu.top、jx.4kdv.com、www.mtosz.com、jx.playerjy.com。
+
+#### ⚡ 万能嗅探引擎（5 种提取策略组合）
+- 策略 1：**3xx 跳转地址**：fetch `redirect:follow` 后最终 URL 本身就是视频直接命中
+- 策略 2：**Content-Type 判断**：纯 `image/*` / `video/*` 响应直接拿 URL
+- 策略 3：**JSON / JSONP 递归扫描**：`JSON.parse` 成功后 `walkJsonForVideoUrls` 深度递归对象，识别 `url/play/video/src/m3u8/link/playurl/vod/file` 等键名直接加
+- 策略 4：**HTML/JS/纯文本正则**：扩展正则匹配 m3u8/mp4/flv/ts/webm/mkv/m3u/mpd 并自动修复 `\/` 转义；额外 key-value 正则抓 `"xxx":"http://..."` 结构
+- 策略 5：**HTML 标签属性**：匹配 `<video>/<source>/<iframe>/<embed>/<frame>/<script>` 的 `src/data/poster`
+- 每个接口响应体**上限 2MB**（流式读 + 超限 cancel），避免第三方超大页面占爆内存；**独立 AbortController 超时**
+- 质量打分：m3u8 +30 / mp4 +25 / 4k|1080|2160|hdr|uhd +20 / 720|hd +10，结果按质量分降序
+
+#### ⚡ 多线程并发框架
+- `runWithLimit(tasks, limit)`：自研简单 p-limit 并发控制，队列化执行 18 个任务，保证并发上限稳定
+- `MX_UNIVERSAL_CONCURRENCY`（默认 6）控制外部并发；`universalSem` 信号量（并发 ×3）限制**对外整体并发**，防止多次 `/sniff` 把网络/CPU 打爆
+- `MX_UNIVERSAL_EARLY_HITS`：命中 N 条唯一地址立即 `stopped=true`，剩余任务直接标记 skipped 节省时间
+- 每个 provider 独立 `AbortController` 超时（默认 12s），不会被一两个慢接口拖死
+
+#### 🌐 对外万能嗅探 JSON 接口 `GET /sniff?url=...`
+- 返回字段：`code / videoUrl / totalCostMs / totalProviders / finished / successProviders / failedProviders / earlyStopped / results[] / perProvider?`
+- `results[]` = 去重后质量分降序的播放地址（`{ url, from, providerCostMs, quality }`）
+- 默认返回 `perProvider` 用于调试；传 `detailed=0` 去掉以省带宽
+- 独立 `universalCache` LRU 缓存，`X-Cache: HIT / MISS / DIRECT-VIDEO` 三态响应头
+- 输入本身就是视频地址 → `DIRECT-VIDEO` 零开销返回
+
+#### 🎨 后台「万能嗅探测试页」`GET /admin/sniff`（Basic Auth 保护）
+- 顶部渐变色标题栏 + 6 项实时统计卡片（总耗时/总数/已完成/成功/失败/唯一源），下方进度条动画
+- **18 个 provider 两列卡片列表**：每完成一个实时刷新状态颜色（⏳等待→⏳请求→✅成功/❌失败）带耗时和 HTTP/错误信息
+- **去重结果列表**：画质分徽章 + 耗时 + URL；每条三个按钮：`▶ 试播`（内置 `<video>` 直接播放 m3u8/mp4）、`🔗 调用主解析`、`🌐 直接打开`
+- **SSE 流式进度**（`/admin/api/sniff-stream`）：每完成 1 个 provider 立刻推送 progress 事件；Nginx/反代设置 `X-Accel-Buffering: no` 防缓冲；**SSE 失败自动回退普通 `/sniff?detailed=1` JSON** 保证可用
+- 后台首页顶部加入 🔎 紫色「万能嗅探」快捷入口按钮
+
+#### 🗂️ 配套路由 & 状态接口
+- `GET /admin/api/providers`：返回 providers 列表 + 并发/超时/最大结果等配置（前端 UI 初始化）
+- `GET /admin/api/status` 与 `GET /` 健康检查新增 `universal` 字段（是否启用、接口数、并发、缓存大小、TTL、最大返回数）
+- 启动控制台新增「万能嗅探」分区：打印测试页 URL、对外接口 URL、缓存/提前返回/代理状态
+
+### 优化
+- `package.json` version → 2.1.0，description 加入万能嗅探能力说明
+- `.env.example` → 新增「八、万能嗅探专属配置」章节 + 18 个内置接口完整清单 + 示例用法
+- `update.js` 的 `SOURCE_FILES` 早已经包含 `.env.example`，源码更新时新变量配置模板会同步
+
+---
+
 ## [2.0.0] - 2026-08-18
 
 > 💥 **大版本升级**：性能大幅优化 + 配置全面环境变量化。功能完全向后兼容（现有接口不变、旧环境变量名仍可用），代码内部几乎全部重写，版本号升至 2.0。

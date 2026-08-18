@@ -1,8 +1,8 @@
-# 超级嗅探 (Super Sniffer) v2
+# 超级嗅探 (Super Sniffer) v2.1
 
 基于 **PHP + Node.js (Puppeteer)** 的视频 m3u8 地址解析服务。输入视频页面链接，自动嗅探并返回页面中的 `.m3u8` 播放地址。
 
-v2 版本在保持原有功能的基础上，重点做了 **性能大幅优化** 和 **统一的 MX_ 前缀环境变量配置**。
+**v2.1 新增**：内置 18 个第三方 VIP 解析接口（万能嗅探），多线程并发提取、多策略组合、自动去重按画质排序多路返回，并在后台提供带 SSE 进度的测试页。
 
 ---
 
@@ -15,6 +15,7 @@ v2 版本在保持原有功能的基础上，重点做了 **性能大幅优化**
 - 支持带查询参数的 m3u8 地址（如 `index.m3u8?token=xxx`）
 - 内置管理后台（支持 Basic Auth 账号密码保护），支持在线更新（浏览器更新 / 源码更新独立进行，一键升级）
 - 所有配置通过 **MX_ 前缀的环境变量** 集中管理（向下兼容旧变量名）
+- 🆕 **万能嗅探**：内置 18 个第三方 VIP 解析接口（jx.xmflv.cc、jx.playerjy.com、yparse 等），6 路并发 + SSE 流式进度 + 5 种提取策略组合，返回去重后的多条 m3u8/mp4 播放地址，还可一键试播
 
 ### 🚀 v2 性能优化（相比 v1）
 
@@ -27,6 +28,9 @@ v2 版本在保持原有功能的基础上，重点做了 **性能大幅优化**
 | **信号量并发控制** | 限制同时解析数（默认 5），队列超时报错，防 OOM | ⭐⭐⭐ 稳定性极大提升 |
 | **资源屏蔽** | 请求拦截自动 abort image / font / media，省带宽加速加载 | ⭐⭐⭐ 单次省几百毫秒 |
 | **PHP 层缓存** | `api.php` 本地文件缓存，相同请求连 Node.js 都不调用 | ⭐⭐⭐⭐ PHP 层直接毫秒级返回 |
+| **🆕 万能嗅探并发** | 18 个第三方接口 6 路并发提取，去重后多路返回，整体耗时 ≈ 最慢那 1/3 接口 | ⭐⭐⭐⭐ 解析成功率 × N |
+| **🆕 万能嗅探提取策略** | 3xx 跳转/JSON 递归/HTML 正则/<video> 属性/JSONP —— 五重组合命中率更高 | ⭐⭐⭐⭐ 对返回 JSON 的接口命中显著提升 |
+| **🆕 万能嗅探结果缓存** | `MX_UNIVERSAL_TTL` 内相同视频页直接返回，省掉 18 次外网请求 | ⭐⭐⭐⭐⭐ 毫秒级响应 |
 | **后台 Basic Auth** | 管理后台支持账号密码，之前任何人可访问更新 | ⭐⭐⭐ 安全性 |
 
 ---
@@ -181,6 +185,15 @@ location ~ \.php$ {
 | **更新** | `MX_GITHUB_REPO` | `MXTX` | `GITHUB_REPO` | GitHub 仓库名 |
 | **更新** | `MX_GITHUB_TOKEN` | 空 | `GITHUB_TOKEN` | GitHub Token（私有仓库/限流） |
 | **更新** | `MX_PROXY` | 空 | - | 下载更新代理（如 `http://127.0.0.1:7890`） |
+| **🆕 万能嗅探** | `MX_UNIVERSAL_ENABLE` | `true` | - | 是否启用万能嗅探模块（/sniff + /admin/sniff） |
+| **🆕 万能嗅探** | `MX_UNIVERSAL_TIMEOUT` | `12000` | - | 单第三方接口请求超时（毫秒） |
+| **🆕 万能嗅探** | `MX_UNIVERSAL_CONCURRENCY` | `6` | - | 最大同时请求第三方接口数 |
+| **🆕 万能嗅探** | `MX_UNIVERSAL_TTL` | `1800` | - | 万能嗅探结果缓存 TTL（秒） |
+| **🆕 万能嗅探** | `MX_UNIVERSAL_CACHE_MAX` | `200` | - | 万能嗅探缓存最大条目 |
+| **🆕 万能嗅探** | `MX_UNIVERSAL_MAX_RESULTS` | `12` | - | 去重后最多返回播放地址数 |
+| **🆕 万能嗅探** | `MX_UNIVERSAL_EARLY_HITS` | `0` | - | 命中 N 条唯一地址即提前返回（0=等全部） |
+| **🆕 万能嗅探** | `MX_UNIVERSAL_PROVIDERS_JSON` | 空 | - | 自定义接口列表（JSON 数组字符串） |
+| **🆕 万能嗅探** | `MX_UNIVERSAL_PROXY` | 空 | - | 万能嗅探请求代理（默认复用 MX_PROXY） |
 
 ### PHP（api.php）专属
 
@@ -263,6 +276,75 @@ GET /node.js?url=<视频页面地址>
 { "code": 500, "msg": "解析失败: ..." }
 ```
 
+### 万能嗅探（18 个第三方接口并发解析，返回多路地址）
+
+```
+GET /sniff?url=<VIP 视频页面地址>[&detailed=1]
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| url | string | 是 | VIP 视频页面链接（需 URL 编码） |
+| detailed | 0/1 | 否 | 是否返回每个第三方接口的逐接口明细 `perProvider`（默认 1；传 0 省带宽） |
+
+**Response Headers：**
+- `X-Cache: HIT/MISS/DIRECT-VIDEO`
+
+**成功返回（示例）：**
+```jsonc
+{
+  "code": 200,
+  "videoUrl": "https://v.qq.com/x/cover/xxxx.html",
+  "totalCostMs": 7284,
+  "totalProviders": 18,
+  "finished": 18,
+  "successProviders": 9,
+  "failedProviders": 9,
+  "earlyStopped": false,
+  "results": [
+    {
+      "url": "https://cdn.example.com/a/index.m3u8?auth=xxx",
+      "from": "https://jx.xmflv.cc/?url=",
+      "providerCostMs": 2134,
+      "quality": 30
+    },
+    {
+      "url": "https://cdn2.example.com/b/video.mp4?k=vvv",
+      "from": "https://www.ckplayer.vip/jiexi/?url=",
+      "providerCostMs": 4511,
+      "quality": 25
+    }
+    // 最多 MX_UNIVERSAL_MAX_RESULTS 条，默认 12 条，按 quality 降序
+  ],
+  "perProvider": [  // detailed=0 时该字段不返回
+    { "provider": "https://jx.xmflv.cc/?url=", "ok": true,  "urls": ["..."], "cost": 2134, "http": 200 },
+    { "provider": "https://jx.xmflv.com/?url=","ok": false, "urls": [],       "cost": 12000,"error": "超时 (12000ms)" }
+    // ...共 18 条
+  ]
+}
+```
+
+**失败/异常：**
+```jsonc
+{ "code": 400, "msg": "请提供需要解析的链接" }
+{ "code": 500, "msg": "万能嗅探失败: 请求排队超时（队列积压，当前并发上限 18）" }
+{ "code": 503, "msg": "万能嗅探模块未启用（MX_UNIVERSAL_ENABLE=false）" }
+{ "code": 404, "videoUrl": "...", "results": [], "perProvider": [...] } // 全部接口未命中
+```
+
+### 后台「万能嗅探 SSE 流式进度」（/admin 下，Basic Auth 保护）
+```
+GET /admin/api/sniff-stream?url=<URL>
+Accept: text/event-stream
+```
+事件流：每完成一个 provider 推送一条 `event: progress`；全部结束推送一条 `event: done`（payload = /sniff 返回的去重后最终结果，不含 `perProvider`）。
+若浏览器 `EventSource` 不可用，前端会自动回退普通 `/sniff?detailed=1` JSON。
+
+```
+GET /admin/api/providers
+```
+返回第三方接口列表与并发、超时配置（前端 UI 初始化用）。
+
 ### PHP 前端接口
 
 ```
@@ -280,18 +362,27 @@ GET /api.php?url=<视频页面地址>
 A: 保守估计：
 - 第一次解析一个新站：v1 大概 5~10 秒（启动 Chrome 2s + 加载 3s + 等待 3s），v2 大概 2~5 秒（Chrome 已启动 + 资源屏蔽 + 找到即返回 可快到 1s 内）
 - 第二次请求同一个 URL：v1 还是 5~10 秒，v2 毫秒级（缓存命中）
+- 🆕 万能嗅探并发 18 接口 → 整体耗时 ≈ 最慢那 1/3 的接口（12s 超时），成功率是单接口数倍。
+
+**Q: 万能嗅探中某几个接口连不上/太慢怎么办？**
+A:
+- 超时可调：`MX_UNIVERSAL_TIMEOUT=20000`（改长）；
+- 单独走代理：`MX_UNIVERSAL_PROXY=http://127.0.0.1:7890`；
+- 删减慢接口：通过 `MX_UNIVERSAL_PROVIDERS_JSON='["...","..."]'` 自己指定一个子集，或替换成更快的接口。
+- 提前结束：`MX_UNIVERSAL_EARLY_HITS=4`，拿到 4 条唯一播放地址立刻结束。
 
 **Q: 后台一直弹登录框？**
 A: 你开启了 `MX_ADMIN_USER/PASS`，请输入正确的账号密码。如果忘记，去掉这两个环境变量重启即可关闭认证。
 
 **Q: 内存占用会不会越来越大？**
-A: v2 做了多重保护：LRU 缓存上限 500 条、Page 池上限 8/浏览器、并发信号量 5。正常使用内存 500MB~1.5GB 足够。
+A: v2 做了多重保护：LRU 缓存上限 500 条、Page 池上限 8/浏览器、并发信号量 5。万能嗅探有独立 `MX_UNIVERSAL_CACHE_MAX`（默认 200）+ 响应体上限 2MB。正常使用内存 500MB~1.5GB 足够。
 
 **Q: 并发满了请求会怎样？**
-A: 进入队列排队；排队超过 `MX_REQUEST_QUEUE_TIMEOUT`（默认 90 秒）会直接返回 `请求排队超时`，避免无限积压。
+A: 进入队列排队；排队超过 `MX_REQUEST_QUEUE_TIMEOUT`（默认 90 秒）会直接返回 `请求排队超时`，避免无限积压。万能嗅探用独立信号量（`MX_UNIVERSAL_CONCURRENCY*3`），不影响主 Puppeteer 解析。
 
 **Q: 提示 `解析失败: ...`？**
 A: 请检查 Chrome 是否可用。项目内已打包 `chrome-linux64`，也可通过 `MX_CHROME_PATH` 指定系统 Chrome。
+万能嗅探（`/sniff`）失败时不会影响 Chrome，它只走普通 fetch/第三方接口，先确认是否可直接访问 `https://jx.xmflv.cc/`。
 
 ---
 
