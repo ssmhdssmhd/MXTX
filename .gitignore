@@ -4,6 +4,12 @@ node_modules/
 # Chrome 浏览器（体积较大，从 chrome-linux64.tar.xz 解压）
 chrome-linux64/
 
+# 浏览器压缩包（体积较大，仅内置在分发 zip 中）
+chrome-linux64.tar.xz
+chrome-linux64.tar.gz
+chrome-linux64.tgz
+chrome-linux64.zip
+
 # 日志
 *.log
 npm-debug.log*

@@ -5,6 +5,22 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.0] - 2026-08-18
+
+### 新增
+
+- 新增 `1.sh` 一键解压浏览器脚本
+  - 自动查找当前目录及 `upload/`、`uploads/` 目录下的浏览器压缩包
+  - 支持 `chrome-linux64.tar.xz`、`chrome-linux64.tar.gz`、`chrome-linux64.zip` 等格式
+  - 自动解压到项目根目录 `chrome-linux64/` 并设置可执行权限
+  - 验证 Chrome 可运行，缺失系统依赖时自动尝试安装
+  - Chrome 已就绪时自动跳过解压
+- 浏览器已内置进分发压缩包（`chrome-linux64.tar.xz`）
+
+### 优化
+
+- 更新 `README.md`，补充一键解压浏览器的使用说明
+
 ## [1.0.0] - 2026-08-18
 
 ### 新增

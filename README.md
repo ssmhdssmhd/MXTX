@@ -20,23 +20,33 @@
 
 ```
 超级嗅探/
+├── 1.sh             # 一键解压浏览器脚本
 ├── api.php          # PHP 前端接口（转发请求、提取 m3u8）
 ├── node.js          # Node.js 解析服务（Express + Puppeteer）
 ├── package.json     # Node.js 依赖配置
 ├── .user.ini        # PHP 运行配置
-├── chrome-linux64/  # 打包的 Chrome 浏览器（可选）
+├── chrome-linux64/  # 解压后的 Chrome 浏览器（由 1.sh 生成）
 └── node_modules/    # Node.js 依赖
 ```
 
 ## 快速开始
 
-### 1. 准备 Chrome 浏览器
+### 1. 一键解压浏览器
 
-项目使用 Puppeteer 驱动 Chrome 解析页面。将 `chrome-linux64.tar.xz` 解压到项目根目录：
+项目使用 Puppeteer 驱动 Chrome 解析页面。浏览器已内置在分发压缩包中，运行 `1.sh` 会自动解压到正确位置：
 
 ```bash
-tar -xf chrome-linux64.tar.xz
+bash 1.sh
+# 或
+chmod +x 1.sh && ./1.sh
 ```
+
+脚本会自动完成以下操作：
+
+- 自动查找当前目录（或 `upload/`、`uploads/` 目录）下的浏览器压缩包
+- 支持 `chrome-linux64.tar.xz`、`chrome-linux64.tar.gz`、`chrome-linux64.zip` 等格式
+- 解压到项目根目录的 `chrome-linux64/` 并设置可执行权限
+- 验证 Chrome 可运行，缺失系统依赖时自动尝试安装
 
 也可以使用系统已安装的 Chrome，通过环境变量指定：
 

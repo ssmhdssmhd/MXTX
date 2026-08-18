@@ -1,6 +1,6 @@
 {
   "name": "super-sniffer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "超级嗅探 - 基于 Puppeteer 的视频 m3u8 地址解析服务（PHP + Node.js）",
   "main": "node.js",
   "scripts": {
