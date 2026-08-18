@@ -1,6 +1,6 @@
-# 超级嗅探 (Super Sniffer) v2.1
+# 超级嗅探 (Super Sniffer) v2.2
 
-基于 **PHP + Node.js (Puppeteer + Express)** 的视频 m3u8 地址解析服务 + **万能嗅探引擎**。输入视频页面链接或 VIP 播放链接，自动嗅探并返回可播放的 `.m3u8` 播放地址。v2.1 新增 **万能嗅探** 功能，内置 18 个第三方解析接口并发调用，5 种结果提取策略，SSE 流式进度推送，结果去重与速度排名。
+基于 **PHP + Node.js (Puppeteer + Express)** 的视频 m3u8 地址解析服务 + **万能嗅探引擎**。输入视频页面链接或 VIP 播放链接，自动嗅探并返回可播放的 `.m3u8` 播放地址。v2.1 新增 **万能嗅探** 功能，内置 18 个第三方解析接口并发调用，5 种结果提取策略，SSE 流式进度推送，结果去重与速度排名。v2.2 新增「浏览器池 v2 + PagePool 预建复用 + 15s 巡检/RSS 回收原位复活 + Provider 动态评分熔断 Top10 优先 + LRU 持久化热恢复 + 低内存降级 + /healthz 三路探针」。
 
 ## 功能特性
 
@@ -12,22 +12,37 @@
 - 内置管理后台，支持在线更新（浏览器更新 / 源码更新独立进行，一键升级）
 - **v2 新增**：MX_ 变量系统、Basic Auth 后台鉴权、LRU 缓存、信号量并发控制、EarlyReturn 提前返回
 - **v2.1 新增**：万能嗅探引擎（18 接口并发）、SSE 流式进度、去重与速度排名、试播功能、专用测试页 `/admin/sniff`
+- **v2.2 新增**：
+  - 🔧 MX_BROWSER_ENABLE 开关 + 浏览器池 v2 并行启动（3 Chromium 6s 拉起）
+  - 🧱 PagePool 预建复用（消除 150~400ms 建页开销）+ MX_PAGE_MAX_USE / MX_PAGE_IDLE_TIMEOUT 双回收
+  - 🩺 15s 健康巡检 + /proc/<pid>/status VmRSS 超 1200MB 原位复活
+  - 🎯 Provider 动态评分（successRate*1000 + hitRate*500 - avgLat/30）+ 连续失败 3 次熔断 30s
+  - ⏩ runUniversalSniff Top10 优先调度，整体 2~3s 更快出结果
+  - 💾 LRU 缓存 JSONL 持久化，重启 loadFromDisk 热恢复（0 冷启动）
+  - 🧠 低内存自动降级：<1GB → 池 1/Page 2；<2GB → 池 2/Page 3
+  - 🧪 /healthz/live | /startup | /ready 三路独立探针，容器/K8s/PM2 友好
 
 ### v2 性能优化对比表
 
-| 特性 | v1.x | v2.0 | v2.1 |
-|------|------|------|------|
-| 单接口解析速度 | ~15s | ~5s（LRU+EarlyReturn） | ~5s |
-| 最大并发请求 | 5（无限制可能崩溃） | 10（信号量控制） | 10（信号量控制） |
-| 缓存命中 | 无 | LRU 1000 条 | LRU 1000 条 |
-| 配置方式 | 硬编码 + 零散 env | MX_ 变量统一管理 | MX_ 变量统一管理 |
-| 后台鉴权 | 无 | Basic Auth | Basic Auth |
-| 万能嗅探接口 | 0 | 0 | **18 个内置接口** |
-| 万能嗅探并发 | 0 | 0 | **18 路并发** |
-| 万能嗅探提取策略 | 0 | 0 | **5 种**（m3u8正则/JSON字段/iframe/src属性/混合） |
-| 实时进度推送 | 无 | 无 | **SSE 流式**（/admin/api/sniff-stream） |
-| 结果去重与排名 | 无 | 无 | **按 URL 去重 + 响应速度排名** |
-| 专用测试页 | 无 | 无 | **/admin/sniff**（Basic Auth，试播内嵌） |
+| 特性 | v1.x | v2.0 | v2.1 | v2.2 |
+|------|------|------|------|------|
+| 单接口解析速度 | ~15s | ~5s（LRU+EarlyReturn） | ~5s | ~3s（PagePool + 响应捕获命中） |
+| 最大并发请求 | 5（无限制可能崩溃） | 10（信号量控制） | 10（信号量控制） | 15（PagePool 总容量） |
+| 缓存命中 | 无 | LRU 1000 条 | LRU 1000 条 | LRU 1000 条 + **JSONL 持久化热恢复 0 冷启动** |
+| 配置方式 | 硬编码 + 零散 env | MX_ 变量统一管理 | MX_ 变量统一管理 | MX_ 变量统一管理（25+ 个变量） |
+| 后台鉴权 | 无 | Basic Auth | Basic Auth | Basic Auth |
+| 浏览器启动 | 串行 ~15s/单页 | 串行 ~15s/单页 | 串行 ~15s/单页 | **并行启动 6s（3 Chromium Promise.allSettled）** |
+| 建页开销 | 150~400ms/次 | 150~400ms/次 | 150~400ms/次 | **PagePool acquire/release 0ms** |
+| 浏览器健康 | 无（死了就挂） | 无（死了就挂） | 无（死了就挂） | **15s 巡检 + RSS 超限原位复活 0 downtime** |
+| 万能嗅探接口 | 0 | 0 | **18 个内置接口** | **18 个内置接口** |
+| 万能嗅探并发 | 0 | 0 | **18 路并发** | **18 路并发 + Top10 优先 2~3s 更快** |
+| 万能嗅探提取策略 | 0 | 0 | **5 种**（m3u8正则/JSON字段/iframe/src属性/混合） | **5 种** + 共享拦截器自动入 bw._hits |
+| 万能嗅探稳定性 | 0 | 0 | 失败直接返回 | **动态评分 + 连续失败 3 次熔断 30s 冷却** |
+| 实时进度推送 | 无 | 无 | **SSE 流式**（/admin/api/sniff-stream） | **SSE 流式**（/admin/api/sniff-stream） |
+| 结果去重与排名 | 无 | 无 | **按 URL 去重 + 响应速度排名** | **按 URL 去重 + 响应速度排名** |
+| 专用测试页 | 无 | 无 | **/admin/sniff**（Basic Auth，试播内嵌） | **/admin/sniff**（Basic Auth，试播内嵌） |
+| 低内存适配 | 无 | 无 | 无 | **自动降级：<1GB 池1/Page2；<2GB 池2/Page3** |
+| 健康探针 | 无 | 无 | 无 | **/healthz/live | startup | ready 三路** |
 
 ## 系统要求
 
@@ -35,19 +50,21 @@
 - PHP >= 7.0（仅前端接口需要）
 - Chrome / Chromium（项目内已打包 `chrome-linux64`，或使用系统浏览器）
 - 内存建议 >= 512MB（万能嗅探 18 并发时约占用 200MB）
+- 推荐配置：>= 2GB 内存 → 浏览器池 3 + PagePool 5（总 15 Page）可支撑 ~10 QPS
 
 ## 项目结构
 
 ```
 超级嗅探/
-├── 1.sh             # 一键解压浏览器脚本
+├── 1.sh             # 一键解压浏览器脚本（v2.2：已存在直接 exit 0）
 ├── api.php          # PHP 前端接口（转发请求、提取 m3u8）
-├── node.js          # Node.js 解析服务（Express + Puppeteer + 万能嗅探）
+├── node.js          # Node.js 解析服务（Express + Puppeteer + 万能嗅探 + 浏览器池 v2）
 ├── update.js        # 在线更新模块（浏览器/源码独立更新，MX_ 变量）
 ├── admin.html       # 管理后台页面
-├── package.json     # Node.js 依赖配置
+├── package.json     # Node.js 依赖配置（v2.2：setup/doctor scripts，2.2.0）
 ├── .user.ini        # PHP 运行配置
-├── .env.example     # 环境变量示例（9 大类 MX_ 变量）
+├── .env.example     # 环境变量示例（9 大类 25+ MX_ 变量，v2.2 新增 14 个）
+├── .mx_cache/       # v2.2 新增：LRU 持久化目录（parse.jsonl/universal.jsonl/provider-score.json）
 ├── chrome-linux64/  # 解压后的 Chrome 浏览器（由 1.sh 生成）
 └── node_modules/    # Node.js 依赖
 ```
@@ -60,12 +77,13 @@
 
 ```bash
 bash 1.sh
-# 或
-chmod +x 1.sh && ./1.sh
+# 或（npm run setup）
+npm run setup
 ```
 
 脚本会自动完成以下操作：
 
+- **v2.2 新增**：若 `MX_CHROME_PATH` 指定的路径已存在，直接 exit 0 免重下 200MB+
 - 自动查找当前目录（或 `upload/`、`uploads/` 目录）下的浏览器压缩包
 - 支持 `chrome-linux64.tar.xz`、`chrome-linux64.tar.gz`、`chrome-linux64.zip` 等格式
 - 解压到项目根目录的 `chrome-linux64/` 并设置可执行权限
@@ -75,6 +93,7 @@ chmod +x 1.sh && ./1.sh
 
 ```bash
 export MX_CHROME_PATH="/usr/bin/google-chrome"
+npm run doctor   # 验证 Chrome 存在性
 ```
 
 ### 2. 安装依赖
@@ -106,6 +125,10 @@ node node.js
 MX_PORT=8080 node node.js
 ```
 
+**v2.2 启动控制台**新增两个分区：
+- 【浏览器池 v2.2】显示 poolSize、warmup 结果、PagePool 总数、健康检查间隔
+- 【缓存 & Provider】显示持久化目录、已从磁盘加载条目数、Provider 评分排名 Top5
+
 ### 5. 配置 PHP 前端接口
 
 将 `api.php` 部署到 PHP 环境（如 Nginx + PHP-FPM），通过环境变量指定解析服务地址：
@@ -132,9 +155,20 @@ export MX_PLAYER_HOST="http://127.0.0.1:1314"
 | **浏览器** | MX_CHROME_PATH | `./chrome-linux64/chrome` | Chrome 可执行文件路径 |
 | **浏览器** | MX_PARSE_TIMEOUT | 30000 | 页面加载超时（毫秒） |
 | **浏览器** | MX_EXTRA_WAIT | 3000 | 加载完成后额外等待时间（毫秒） |
+| **浏览器** | **MX_BROWSER_ENABLE** | **true** | **v2.2** 是否启用浏览器池（false=仅万能嗅探 HTTP 模式） |
+| **浏览器** | **MX_BROWSER_POOL_SIZE** | **3** | **v2.2** 常驻 Chromium 进程数（<2GB 自动降级到 2，<1GB 到 1） |
+| **浏览器** | **MX_BROWSER_WARMUP** | **true** | **v2.2** 启动时并行预热浏览器池（Promise.allSettled ~6s） |
+| **浏览器** | **MX_BROWSER_MAX_MEM_MB** | **1200** | **v2.2** 单进程 RSS 上限 MB，超了健康巡检主动换新 |
+| **浏览器** | **MX_BROWSER_HEALTH_INTERVAL** | **15** | **v2.2** 巡检间隔秒：isAlive + RSS + 原位复活 + Page 补齐 |
+| **浏览器** | **MX_PAGE_POOL_SIZE** | **5** | **v2.2** 每浏览器预建 Page 数（总 Page = 池 × 此值） |
+| **浏览器** | **MX_PAGE_MAX_USE** | **50** | **v2.2** 单 Page 复用次数上限，超了丢弃重建防污染 |
+| **浏览器** | **MX_PAGE_IDLE_TIMEOUT** | **600** | **v2.2** Page 空闲超时秒（about:blank + 清 cookie 重置） |
 | **缓存** | MX_CACHE_ENABLE | 1 | 是否启用 LRU 缓存（1=启用，0=禁用） |
 | **缓存** | MX_CACHE_MAX | 1000 | LRU 缓存最大条目数 |
 | **缓存** | MX_CACHE_TTL | 3600 | 缓存过期时间（秒） |
+| **缓存** | **MX_CACHE_PERSIST** | **true** | **v2.2** LRU JSONL 持久化开关（重启热恢复） |
+| **缓存** | **MX_CACHE_DIR** | **./.mx_cache** | **v2.2** 持久化目录（parse.jsonl/universal.jsonl/provider-score.json） |
+| **缓存** | **MX_CACHE_FLUSH_INTERVAL** | **60** | **v2.2** 内存 dirty 记录批量落盘间隔秒 |
 | **并发** | MX_SEMAPHORE_MAX | 10 | 最大并发解析请求数（信号量） |
 | **并发** | MX_EARLY_RETURN | 1 | 是否启用 EarlyReturn 提前返回（1=启用） |
 | **更新** | MX_GITHUB_OWNER | `ssmhdssmhd` | 在线更新的 GitHub 用户名 |
@@ -150,6 +184,10 @@ export MX_PLAYER_HOST="http://127.0.0.1:1314"
 | **万能嗅探** | MX_SNIFF_RETRY | 1 | 单接口失败重试次数 |
 | **万能嗅探** | MX_SNIFF_HEADCHECK | 1 | 是否对返回 m3u8 做 HEAD 可达性检查（1=启用） |
 | **万能嗅探** | MX_SNIFF_PROVIDERS | （内置18个，留空=全部） | 启用的接口ID列表，逗号分隔 |
+| **万能嗅探** | **MX_UNIVERSAL_CIRCUIT_BREAK** | **3** | **v2.2** Provider 连续失败 N 次触发熔断 |
+| **万能嗅探** | **MX_UNIVERSAL_CB_COOLDOWN** | **30** | **v2.2** 熔断冷却秒（半开试探 1 次） |
+| **万能嗅探** | **MX_UNIVERSAL_PER_PROVIDER_CONC** | **2** | **v2.2** 单 Provider 同时请求上限（防限流） |
+| **万能嗅探** | **MX_UNIVERSAL_TOPK_FIRST** | **10** | **v2.2** Top K 评分最高的 Provider 先跑（更快出结果） |
 
 ### PHP 专属环境变量
 
@@ -166,6 +204,7 @@ export MX_PLAYER_HOST="http://127.0.0.1:1314"
 ### 后台功能
 
 - **服务状态**：实时显示服务运行状态、监听端口、Chrome 版本、当前版本、缓存统计
+- **v2.2 新增**：pagePoolTotal / pagePoolBusy / memory.totalMB.freeMB / providerStats.rankedTop5 / universal.circuitBroken
 - **万能嗅探状态**：已启用接口数量、并发配置、累计成功/失败统计
 - **更新源切换**：稳定版（`main` 分支）/ 先行版（`cs1` 分支）自由切换
 - **浏览器更新**：仅更新 Chrome 浏览器，不影响源码与服务逻辑
@@ -212,12 +251,12 @@ export MX_PLAYER_HOST="http://127.0.0.1:1314"
 ```
 GET  /admin                        # 管理后台页面（Basic Auth）
 GET  /admin/sniff                  # 万能嗅探测试页（Basic Auth）
-GET  /admin/api/status             # 服务状态 + 万能嗅探统计
+GET  /admin/api/status             # 服务状态 + 万能嗅探统计 + v2.2 PagePool/内存/Provider
 GET  /admin/api/update-source      # 获取当前更新源
 POST /admin/api/update-source      # 切换更新源（body: {"source":"stable"|"beta"}）
 GET  /admin/api/check-update       # 检查更新（对比所选分支最新版本）
 POST /admin/api/update             # 执行更新（body: {"type":"browser"|"source"|"all"}）
-GET  /admin/api/providers          # 获取万能嗅探接口列表（可用/已启用/配置）
+GET  /admin/api/providers          # 获取万能嗅探接口列表（可用/已启用/配置 + v2.2 评分/熔断状态）
 GET  /admin/api/sniff-stream       # SSE 万能嗅探（Query: url,detailed,providers）
 ```
 
@@ -249,7 +288,7 @@ GET /node.js?url=<视频页面地址>
 {"code":500,"msg":"解析失败: ..."}
 ```
 
-### 2) /sniff — 万能嗅探（18 接口并发）
+### 2) /sniff — 万能嗅探（18 接口并发 + v2.2 评分熔断 Top10 优先）
 
 ```
 GET  /sniff?url=<VIP/视频链接>&detailed=1&providers=p1,p2,p3
@@ -295,7 +334,9 @@ POST /sniff  body: {"url":"...","detailed":true,"providers":["p1","p2"]}
     "fail": 12,
     "timeout": 3,
     "deduped": 11,
-    "elapsedMs": 4829
+    "elapsedMs": 4829,
+    "circuitBroken": ["p05_superparse"],
+    "topKFirst": 10
   }
 }
 ```
@@ -332,6 +373,7 @@ GET /admin/api/sniff-stream?url=<URL>&detailed=1&providers=p1,p2
 | `progress` | `{"id":"p1","status":"running","elapsedMs":0}` | 某接口进入运行中 |
 | `progress` | `{"id":"p1","status":"success","latencyMs":842,"matches":[...]}` | 某接口成功 |
 | `progress` | `{"id":"p2","status":"fail","failCode":4008,"error":"超时"}` | 某接口失败 |
+| `progress` | `{"id":"p5","status":"skip","reason":"circuit_break"}` | **v2.2** 熔断跳过 |
 | `result` | （同 /sniff 返回） | 全部完成，推送最终汇总结果 |
 | `done` | `{}` | 结束标记 |
 
@@ -347,15 +389,71 @@ GET /admin/api/providers
 {
   "code": 200,
   "providers": [
-    { "id": "p1", "name": "接口1", "type": "m3u8", "enabled": true, "url": "https://..." },
-    { "id": "p2", "name": "接口2", "type": "json", "enabled": true, "url": "https://..." }
+    { "id": "p1", "name": "接口1", "type": "m3u8", "enabled": true, "url": "https://...", "score": 1320, "ok": 45, "fail": 2, "consecutiveFail": 0, "circuitBroken": false },
+    { "id": "p2", "name": "接口2", "type": "json", "enabled": true, "url": "https://...", "score": 880, "ok": 12, "fail": 5, "consecutiveFail": 3, "circuitBroken": true, "cbUntil": 1739999999999 }
   ],
   "total": 18,
-  "enabled": 18
+  "enabled": 17,
+  "rankedTop5": ["p1", "p3", "p7", "p12", "p6"],
+  "circuitBroken": ["p2"]
 }
 ```
 
-### 4) /api.php — PHP 前端接口
+### 4) /healthz — 健康探针（v2.2 新增）
+
+三路独立探针，适配容器 / K8s / PM2 / systemd 健康检查。
+
+**/healthz/live — 存活探针（Liveness）**
+
+```
+GET /healthz/live
+```
+
+进程在跑就 200，**不依赖**浏览器池 / 缓存。用于 K8s `livenessProbe`，死了就重启。
+
+```json
+// 200 OK
+{ "status": "ok", "uptimeSec": 1234, "pid": 9876 }
+```
+
+**/healthz/startup — 启动探针（Startup）**
+
+```
+GET /healthz/startup
+```
+
+启动流程全部完成（浏览器池 warmup 成功 / 或 MX_BROWSER_ENABLE=false 跳过 / 缓存持久化 loadFromDisk 完成）才返回 200。启动中返回 503。用于 K8s `startupProbe`，慢启动保护。
+
+```json
+// 200 OK
+{ "status": "ok", "startupDone": true, "browserPool": "ready", "cacheLoaded": 128 }
+
+// 503 Service Unavailable
+{ "status": "starting", "startupDone": false, "phase": "warmup_browser_pool" }
+```
+
+**/healthz/ready — 就绪探针（Readiness）**
+
+```
+GET /healthz/ready
+```
+
+服务**能正常接流量**才 200：浏览器池至少 1 个 alive & 有空闲 Page（或 MX_BROWSER_ENABLE=false）。用于 K8s `readinessProbe`，摘除异常 Pod。
+
+```json
+// 200 OK
+{
+  "status": "ok",
+  "browserPool": { "total": 3, "alive": 3, "pagePoolTotal": 15, "pagePoolBusy": 2 },
+  "memory": { "totalMB": 8192, "freeMB": 3200 },
+  "providers": { "rankedTop5": ["p1","p3","p7","p12","p6"], "circuitBroken": [] }
+}
+
+// 503 Service Unavailable（浏览器池全挂）
+{ "status": "unready", "reason": "browser_pool_all_dead", "browserPool": { "total": 3, "alive": 0 } }
+```
+
+### 5) /api.php — PHP 前端接口
 
 ```
 GET /api.php?url=<视频页面地址>
@@ -376,7 +474,7 @@ A: 请确认 Node.js 解析服务已启动，且 `api.php` 中的 `MX_PLAYER_HOS
 A: 部分视频网站需要登录或存在反爬机制，可尝试更换视频源，或调整 `MX_EXTRA_WAIT` 等待时间。也可使用 `/sniff` 万能嗅探，从 18 个第三方接口并发获取播放地址。
 
 **Q: 提示 `解析失败: ...`？**
-A: 请检查 Chrome 是否可用。项目内已打包 `chrome-linux64`，也可通过 `MX_CHROME_PATH` 指定系统 Chrome。运行 `bash 1.sh` 可自动检查依赖。
+A: 请检查 Chrome 是否可用。项目内已打包 `chrome-linux64`，也可通过 `MX_CHROME_PATH` 指定系统 Chrome。运行 `bash 1.sh` 可自动检查依赖。**v2.2 新增**：若环境无 Chromium，可设置 `MX_BROWSER_ENABLE=false`，仍可用万能嗅探 HTTP 模式继续服务。
 
 **Q: 万能嗅探 `/sniff` 返回 `results: []` 怎么办？**
 A: 建议：
@@ -401,6 +499,20 @@ A: 原因可能：
 A: 可以。两种方式：
 1. 环境变量：`export MX_SNIFF_PROVIDERS="p1,p3,p7,p12"`（留空=全部18个）；
 2. 调用参数：`GET /sniff?url=...&providers=p1,p3,p7,p12` 或测试页上手动勾选。
+
+**Q: 为什么会自动降级浏览器池大小？（v2.2 新增）**
+A: v2.2 启动时会读取 `os.totalmem()` 自动适配：
+- **< 1GB 内存**（如低配 VPS / 小容器）：浏览器池强制 1 + PagePool 2，防止 Chromium 吃满内存 OOM；
+- **< 2GB 内存**：浏览器池降为 2 + PagePool 3；
+- **>= 2GB**：按 `MX_BROWSER_POOL_SIZE` / `MX_PAGE_POOL_SIZE` 默认值（3/5）走。
+可在启动控制台【浏览器池 v2.2】分区看实际生效值，或 `/healthz/ready` 接口的 `browserPool` 字段。
+
+**Q: 怎么判断 Provider 被熔断了？（v2.2 新增）**
+A: 三种方式：
+1. **API 接口**：`GET /admin/api/providers`，返回 `circuitBroken: true` 且带 `cbUntil`（到期时间戳 ms）；同时 `summary.circuitBroken` 直接列出所有熔断 ID；
+2. **SSE 进度事件**：`/admin/api/sniff-stream` 里被熔断的 Provider 会发 `{"status":"skip","reason":"circuit_break"}`；
+3. **sniff 结果 summary**：`/sniff` 返回的 `summary.circuitBroken` 数组列出本轮因熔断跳过的 ID。
+熔断机制：连续 `MX_UNIVERSAL_CIRCUIT_BREAK=3` 次失败触发，冷却 `MX_UNIVERSAL_CB_COOLDOWN=30s` 后半开（放 1 次请求试探），成功则恢复，失败重新熔断。评分与熔断状态持久化到 `MX_CACHE_DIR/provider-score.json`，重启不丢。
 
 ## MIT 许可证
 

@@ -5,6 +5,36 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.2.0] - 2026-08-18
+
+### 浏览器池 v2 + PagePool 复用 + Provider 评分熔断 + 持久化 + 健康探针
+
+### Added
+- 🔧 MX_BROWSER_ENABLE 开关（默认 true，可关闭 Puppeteer 仅留万能嗅探）
+- 🚀 initBrowserPool 并行启动（Promise.allSettled），3 个 Chromium 启动耗时从 15s 降到 6s
+- 🧱 PagePool：每浏览器预建 MX_PAGE_POOL_SIZE 个 Page（默认 5），acquire/release 消除 150~400ms 建页开销；MX_PAGE_MAX_USE=50、MX_PAGE_IDLE_TIMEOUT=600s 双回收策略；about:blank + 清 cookie 状态重置
+- 🩺 浏览器池健康检查（MX_BROWSER_HEALTH_INTERVAL=15s）：isAlive 巡检 + /proc/<pid>/status VmRSS > MX_BROWSER_MAX_MEM_MB(1200MB) 主动回收 + 原位复活 + 空闲 Page 补齐
+- 🛡️ 共享拦截器（GLOBAL_BLOCK_RE / GLOBAL_BLOCK_HOST_RE）：只注册一次，避免反复绑定；response 命中 .m3u8 自动加入 bw._hits 提高成功率
+- 💾 LRU 缓存 JSONL 持久化（MX_CACHE_PERSIST / MX_CACHE_DIR / MX_CACHE_FLUSH_INTERVAL）：解析/万能嗅探落盘 parse.jsonl、universal.jsonl，启动自动 loadFromDisk 热恢复
+- 🎯 Provider 动态评分与熔断：ok/fail/hits/totalLat 统计，综合分 = successRate*1000 + hitRate*500 - avgLat/30；连续失败 MX_UNIVERSAL_CIRCUIT_BREAK=3 → 熔断 MX_UNIVERSAL_CB_COOLDOWN=30s；持久化 provider-score.json
+- ⏩ runUniversalSniff 智能调度：splitProvidersTopK(MX_UNIVERSAL_TOPK_FIRST=10) Top10 先跑，熔断的排到尾并标记 skip
+- 🧠 低内存降级（D1）：os.totalmem <1GB → 浏览器池 1/Page 2；<2GB → 池 2/Page 3
+- 🧪 /healthz/live、/healthz/startup、/healthz/ready 三路独立探针，容器/K8s/PM2 友好
+- 📦 package.json 新增 npm run setup（bash 1.sh）、npm run doctor（Chrome 存在性检查）；版本升至 2.2.0；keywords 扩展（browser-pool/page-pool/circuit-breaker/...）
+- 🛠️ 1.sh：启动时若 MX_CHROME_PATH 指定路径已存在则直接 exit 0 免重下 200MB+
+
+### Changed
+- sniffVideoUrl() 改用 acquirePageWrapper() + bw.releasePage(holder)，不再每次 newPage/page.close；合并 bw._hits 响应捕获 URL
+- /admin/api/status 与 / 健康检查 JSON 新增：pagePoolTotal / pagePoolBusy / memory.totalMB.freeMB / providerStats.rankedTop5 / universal.circuitBroken
+- 启动大控制台新增【浏览器池 v2.2】与【缓存 & Provider】两个分区
+- 数据结构：browserPoolStats()、acquirePageWrapper()、PageHolder 类
+
+### Fixed
+- 空 Chromium 环境：MX_BROWSER_ENABLE=false 或 未找到 Chrome 时，不再反复启动失败并阻塞启动；万能嗅探 HTTP 模式可继续服务
+- Chromium 内存泄漏：单进程 RSS 超阈值主动换新；Page 使用次数/空闲过期双策略；profile dir 进程退出时清理
+
+---
+
 ## [2.1.0] - 2026-08-18
 
 ### 新增

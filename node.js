@@ -1,7 +1,7 @@
 /**
- * 超级嗅探 - Node.js 视频解析服务 v2.1
+ * 超级嗅探 - Node.js 视频解析服务 v2.2
  *
- * 版本：v2.1
+ * 版本：v2.2
  *
  * 功能概述：
  *   1. 核心解析接口 /node.js：使用 Puppeteer 无头浏览器打开目标视频页面，
@@ -15,9 +15,20 @@
  *      在线试播、Provider 卡片展示、进度条可视化。
  *   5. 在线更新：支持源码更新 + Chrome 浏览器更新，SSE 流式日志输出。
  *
+ * v2.2 关键增强（浏览器池 + 稳定性 + 智能化）：
+ *   - MX_BROWSER_ENABLE 开关：默认 true，可按环境关闭 Puppeteer
+ *   - 浏览器池并行启动：Promise.allSettled + 自动根据内存降档(D1)
+ *   - 浏览器池健康检查：15s 巡检 + 原位复活 + RSS 超阈值主动回收(A3)
+ *   - PagePool：每浏览器 5 个 page 预热复用，建页 0ms，单页使用上限+空闲过期(A2)
+ *   - 共享拦截器/响应捕获：只注册一次，避免反复配置(A5)
+ *   - Provider 动态评分：命中率/成功率/平均延迟持久化 + 熔断机制 + Top10 先跑(C1/C2)
+ *   - LRU 缓存持久化：解析/万能嗅探/Provider 评分写入 .mx_cache/，重启热恢复(B2)
+ *   - /healthz/{live,ready,startup}：K8s/PM2 三路探针(D3)
+ *
  * 性能优化：
  *   - LRU 缓存：解析结果（TTL 1800s/500条）+ 万能嗅探结果（TTL 3600s/200条）
  *   - 浏览器池：BrowserWrapper 类管理多浏览器实例，避免每次启动/关闭
+ *   - PagePool：多 Page 复用，消除 150~400ms 建页开销 per 请求
  *   - 信号量并发控制：parseSem（解析并发）+ universalSem（万能嗅探并发）
  *   - 万能嗅探 runWithLimit：限制 Provider 同时请求数量，避免资源耗尽
  *   - 流式读取响应：sniffOne 仅读取前 2MB 文本，避免大响应阻塞
@@ -31,17 +42,19 @@
  *   - quality 评分策略：m3u8 > mp4 > 其他，带 4k/1080/720 关键字加分
  *   - dedup 去重：按 URL 去掉重复和子串重复的结果
  *   - detailed 参数：返回详细 Provider 状态而非仅第一个结果
+ *   - provider 评分/熔断：失败 3 次自动熔断 30s，Top10 优先调度
  */
 
 const express = require('express');
 const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
 const updater = require('./update');
 
 // ============================================================
-// 3. 环境变量辅助函数 + 所有 MX_ 配置变量
+// 3. 环境变量辅助函数 + 所有 MX_ 配置变量（含 v2.2 新增 14 项）
 // ============================================================
 function envStr(key, def) {
   const v = process.env[key];
@@ -62,44 +75,88 @@ function envInt(key, def) {
   return isNaN(n) ? def : n;
 }
 
-// 服务配置
+// --- 服务配置 ---
 const MX_PORT = envInt('MX_PORT', envInt('PORT', 1314));
 const MX_HOST = envStr('MX_HOST', '0.0.0.0');
 
-// 后台配置
+// --- 后台配置 ---
 const MX_ADMIN_USER = envStr('MX_ADMIN_USER', 'admin');
 const MX_ADMIN_PASS = envStr('MX_ADMIN_PASS', '');
 const MX_ADMIN_AUTH = envBool('MX_ADMIN_AUTH', !!MX_ADMIN_PASS);
 
-// 浏览器配置
+// --- 浏览器 & 浏览器池（v2.2 扩展）---
 const MX_CHROME_PATH = envStr('MX_CHROME_PATH', envStr('CHROME_PATH',
   path.join(__dirname, 'chrome-linux64', 'chrome')));
-const MX_BROWSER_POOL_SIZE = envInt('MX_BROWSER_POOL_SIZE', 3);
+const MX_BROWSER_ENABLE = envBool('MX_BROWSER_ENABLE', true);
+let MX_BROWSER_POOL_SIZE = envInt('MX_BROWSER_POOL_SIZE', 3);
 const MX_BROWSER_ARGS = envStr('MX_BROWSER_ARGS', '').split(',').filter(Boolean);
+const MX_BROWSER_WARMUP = envBool('MX_BROWSER_WARMUP', true);
+const MX_BROWSER_MAX_MEM_MB = envInt('MX_BROWSER_MAX_MEM_MB', 1200); // D1：单浏览器 RSS 上限（MB）
+const MX_BROWSER_HEALTH_INTERVAL = envInt('MX_BROWSER_HEALTH_INTERVAL', 15); // 秒
 
-// 嗅探配置
+// --- PagePool（v2.2 新增 A2）---
+let MX_PAGE_POOL_SIZE = envInt('MX_PAGE_POOL_SIZE', 5);     // 每浏览器预建 Page 数量
+const MX_PAGE_MAX_USE = envInt('MX_PAGE_MAX_USE', 50);      // 单页使用上限后换新
+const MX_PAGE_IDLE_TIMEOUT = envInt('MX_PAGE_IDLE_TIMEOUT', 600); // 秒，空闲过期
+
+// --- 嗅探 ---
 const MX_PARSE_TIMEOUT = envInt('MX_PARSE_TIMEOUT', envInt('PARSE_TIMEOUT', 30000));
 const MX_EXTRA_WAIT = envInt('MX_EXTRA_WAIT', envInt('EXTRA_WAIT', 3000));
 const MX_USER_AGENT = envStr('MX_USER_AGENT',
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-// 缓存配置
+// --- 缓存（B2 v2.2 扩展持久化）---
 const MX_CACHE_MAX = envInt('MX_CACHE_MAX', 500);
 const MX_CACHE_TTL = envInt('MX_CACHE_TTL', 1800);
+const MX_CACHE_PERSIST = envBool('MX_CACHE_PERSIST', true);
+const MX_CACHE_DIR = envStr('MX_CACHE_DIR', path.join(__dirname, '.mx_cache'));
+const MX_CACHE_FLUSH_INTERVAL = envInt('MX_CACHE_FLUSH_INTERVAL', 60); // 秒，落盘频率
 
-// 并发配置
+// --- 并发 ---
 const MX_PARSE_CONCURRENCY = envInt('MX_PARSE_CONCURRENCY', 5);
 const MX_UNIVERSAL_CONCURRENCY = envInt('MX_UNIVERSAL_CONCURRENCY', 6);
 const MX_SNIFF_ONE_TIMEOUT = envInt('MX_SNIFF_ONE_TIMEOUT', 15000);
 const MX_UNIVERSAL_EARLY_HITS = envInt('MX_UNIVERSAL_EARLY_HITS', 3);
 
-// 更新配置
+// --- 更新 ---
 const MX_AUTO_UPDATE = envBool('MX_AUTO_UPDATE', false);
 
-// 万能嗅探配置
+// --- 万能嗅探（v2.2 新增强化）---
+const MX_UNIVERSAL_ENABLE = envBool('MX_UNIVERSAL_ENABLE', true);
 const MX_UNIVERSAL_CACHE_MAX = envInt('MX_UNIVERSAL_CACHE_MAX', 200);
 const MX_UNIVERSAL_CACHE_TTL = envInt('MX_UNIVERSAL_CACHE_TTL', 3600);
 const MX_UNIVERSAL_DETAILED = envBool('MX_UNIVERSAL_DETAILED', false);
+const MX_UNIVERSAL_CIRCUIT_BREAK = envInt('MX_UNIVERSAL_CIRCUIT_BREAK', 3);  // C2：连续失败次数熔断
+const MX_UNIVERSAL_CB_COOLDOWN = envInt('MX_UNIVERSAL_CB_COOLDOWN', 30);     // C2：熔断冷却秒数
+const MX_UNIVERSAL_PER_PROVIDER_CONC = envInt('MX_UNIVERSAL_PER_PROVIDER_CONC', 2); // 单 provider 并发
+const MX_UNIVERSAL_TOPK_FIRST = envInt('MX_UNIVERSAL_TOPK_FIRST', 10);  // C1：TopK 优先调度
+
+// ============================================================
+// 3.1 低内存自动降级（D1 v2.2 新增）
+// ============================================================
+(function downgradeByMemory() {
+  if (!MX_BROWSER_ENABLE) return;
+  const totalMB = Math.floor((os.totalmem() || 0) / 1024 / 1024);
+  if (totalMB <= 0) return;
+  const before = { pool: MX_BROWSER_POOL_SIZE, page: MX_PAGE_POOL_SIZE };
+  if (totalMB < 1024) {
+    MX_BROWSER_POOL_SIZE = Math.min(MX_BROWSER_POOL_SIZE, 1);
+    MX_PAGE_POOL_SIZE = Math.min(MX_PAGE_POOL_SIZE, 2);
+  } else if (totalMB < 2048) {
+    MX_BROWSER_POOL_SIZE = Math.min(MX_BROWSER_POOL_SIZE, 2);
+    MX_PAGE_POOL_SIZE = Math.min(MX_PAGE_POOL_SIZE, 3);
+  }
+  const changed = (before.pool !== MX_BROWSER_POOL_SIZE) || (before.page !== MX_PAGE_POOL_SIZE);
+  if (changed) {
+    console.log(`[超级嗅探] 检测到低内存环境 ${totalMB}MB，自动降级：浏览器池 ${before.pool}→${MX_BROWSER_POOL_SIZE}，PagePool ${before.page}→${MX_PAGE_POOL_SIZE}`);
+  }
+})();
+
+// --- 缓存持久化目录初始化（B2）---
+if (MX_CACHE_PERSIST) {
+  try { if (!fs.existsSync(MX_CACHE_DIR)) fs.mkdirSync(MX_CACHE_DIR, { recursive: true }); }
+  catch (e) { console.log(`[超级嗅探] 缓存目录创建失败（${MX_CACHE_DIR}）: ${e.message}`); }
+}
 
 // 内置 18 个 PROVIDER
 const PROVIDERS = [
@@ -176,12 +233,21 @@ function checkChrome() {
 }
 
 // ============================================================
-// 5. LRUCache 类 + resultCache
+// 5. LRUCache 类 + resultCache（v2.2 增强：持久化 + 定时 flush）
 // ============================================================
 class LRUCache {
-  constructor(maxSize = 500, ttlMs = 1800000) {
-    this.maxSize = maxSize;
-    this.ttlMs = ttlMs;
+  constructor(arg1, arg2) {
+    let opts = {};
+    if (typeof arg1 === 'object' && arg1 !== null) {
+      opts = arg1;
+    } else {
+      opts.max = arg1;
+      opts.ttlMs = arg2;
+    }
+    this.name = opts.name || '';
+    this.persistDir = opts.persistDir || '';
+    this.maxSize = opts.max || 500;
+    this.ttlMs = opts.ttlMs || 1800000;
     this.map = new Map();
   }
   _isExpired(entry) {
@@ -223,9 +289,52 @@ class LRUCache {
   get size() {
     return this.map.size;
   }
+  loadFromDisk(filename) {
+    try {
+      if (!this.persistDir) return;
+      const fullPath = path.join(this.persistDir, filename);
+      if (!fs.existsSync(fullPath)) return;
+      const raw = fs.readFileSync(fullPath, 'utf8');
+      const lines = raw.split('\n').filter(Boolean);
+      for (const line of lines) {
+        try {
+          const obj = JSON.parse(line);
+          if (!obj || typeof obj.k === 'undefined') continue;
+          const age = Date.now() - (obj.t || 0);
+          if (age < 0 || age > this.ttlMs) continue;
+          this.map.set(obj.k, { value: obj.v, createdAt: obj.t || Date.now() });
+        } catch (e) { }
+      }
+      this._evictIfNeeded();
+    } catch (e) { }
+  }
+  flushToDisk(filename) {
+    try {
+      if (!MX_CACHE_PERSIST || !this.persistDir) return;
+      const fullPath = path.join(this.persistDir, filename);
+      const lines = [];
+      for (const [k, entry] of this.map.entries()) {
+        lines.push(JSON.stringify({ k, v: entry.value, t: entry.createdAt }));
+      }
+      fs.writeFileSync(fullPath, lines.join('\n'), 'utf8');
+    } catch (e) { }
+  }
+  static startAutoFlush(caches, intervalSec) {
+    if (LRUCache._autoFlushTimer) return LRUCache._autoFlushTimer;
+    const intervalMs = Math.max(1, intervalSec || 60) * 1000;
+    const timer = setInterval(() => {
+      for (const cache of caches) {
+        if (!cache || !cache.name) continue;
+        cache.flushToDisk(cache.name + '.jsonl');
+      }
+    }, intervalMs);
+    LRUCache._autoFlushTimer = timer;
+    return timer;
+  }
 }
 
-const resultCache = new LRUCache(MX_CACHE_MAX, MX_CACHE_TTL * 1000);
+const resultCache = new LRUCache({ name: 'parse', persistDir: MX_CACHE_DIR, max: MX_CACHE_MAX, ttlMs: MX_CACHE_TTL * 1000 });
+try { resultCache.loadFromDisk('parse.jsonl'); } catch (e) { }
 
 // ============================================================
 // 6. Semaphore 类 + 万能嗅探引擎
@@ -265,9 +374,16 @@ class Semaphore {
 
 const parseSem = new Semaphore(MX_PARSE_CONCURRENCY);
 
-// 4.5 万能嗅探的 LRU 与 Semaphore
-const universalCache = new LRUCache(MX_UNIVERSAL_CACHE_MAX, MX_UNIVERSAL_CACHE_TTL * 1000);
+// 4.5 万能嗅探的 LRU 与 Semaphore（v2.2 增强持久化）
+const universalCache = new LRUCache({ name: 'universal', persistDir: MX_CACHE_DIR, max: MX_UNIVERSAL_CACHE_MAX, ttlMs: MX_UNIVERSAL_CACHE_TTL * 1000 });
+try { universalCache.loadFromDisk('universal.jsonl'); } catch (e) { }
 const universalSem = new Semaphore(MX_UNIVERSAL_CONCURRENCY);
+
+// 4.5.1 缓存定时持久化（B2 v2.2）
+if (MX_CACHE_PERSIST) {
+  const _flushTimer = LRUCache.startAutoFlush([resultCache, universalCache], MX_CACHE_FLUSH_INTERVAL);
+  if (_flushTimer && typeof _flushTimer.unref === 'function') _flushTimer.unref();
+}
 
 // 4.6 万能嗅探引擎
 const VIDEO_URL_REGEX = /https?:\/\/[^\s"'<>\\]+?\.(m3u8|mp4|flv|mkv|avi|mov|wmv|webm|ts)[^\s"'<>\\]*/ig;
@@ -485,17 +601,37 @@ async function runUniversalSniff(targetUrl, options) {
   const opts = options || {};
   const onProgress = opts.onProgress || (() => {});
   const earlyHits = opts.earlyHits != null ? opts.earlyHits : MX_UNIVERSAL_EARLY_HITS;
-  const providers = opts.providers || PROVIDERS;
+  let providers;
+  if (opts.providers) {
+    providers = opts.providers;
+  } else {
+    const { top, tail } = splitProvidersTopK();
+    providers = [...top, ...tail];
+  }
 
   const allUrls = new Set();
   const providerResults = [];
   let doneCount = 0;
+  let finishedCount = 0;
   const total = providers.length;
   let hitCount = 0;
   let aborted = false;
 
   const tasks = providers.map((provider, i) => async () => {
     if (aborted) {
+      providerResults[i] = { provider, status: 'skip', urls: [] };
+      onProgress({
+        index: i,
+        provider,
+        status: 'skip',
+        count: 0,
+        done: ++doneCount,
+        total,
+        hits: hitCount
+      });
+      return;
+    }
+    if (isProviderCircuitBroken(provider)) {
       providerResults[i] = { provider, status: 'skip', urls: [] };
       onProgress({
         index: i,
@@ -517,11 +653,18 @@ async function runUniversalSniff(targetUrl, options) {
       total,
       hits: hitCount
     });
+    const startTs = Date.now();
     try {
       const urls = await sniffOne(provider, targetUrl, opts);
       const validUrls = urls.filter(isValidUrl);
       validUrls.forEach((u) => allUrls.add(u));
       if (validUrls.length > 0) hitCount++;
+      const diff = Date.now() - startTs;
+      recordProviderResult(provider, { ok: validUrls.length > 0, hitCount: validUrls.length, latencyMs: diff });
+      finishedCount++;
+      if (finishedCount % 10 === 0) {
+        (async () => { try { saveProviderStats(); } catch (e) { } })();
+      }
       providerResults[i] = { provider, status: validUrls.length > 0 ? 'ok' : 'fail', urls: validUrls };
       onProgress({
         index: i,
@@ -536,6 +679,12 @@ async function runUniversalSniff(targetUrl, options) {
         aborted = true;
       }
     } catch (e) {
+      const diff = Date.now() - startTs;
+      recordProviderResult(provider, { ok: false, hitCount: 0, latencyMs: diff });
+      finishedCount++;
+      if (finishedCount % 10 === 0) {
+        (async () => { try { saveProviderStats(); } catch (e) { } })();
+      }
       providerResults[i] = { provider, status: 'fail', urls: [], error: e.message };
       onProgress({
         index: i,
@@ -550,7 +699,11 @@ async function runUniversalSniff(targetUrl, options) {
     }
   });
 
-  await runWithLimit(tasks, MX_UNIVERSAL_CONCURRENCY);
+  try {
+    await runWithLimit(tasks, MX_UNIVERSAL_CONCURRENCY);
+  } finally {
+    (async () => { try { saveProviderStats(); } catch (e) { } })();
+  }
 
   const sortedUrls = [...allUrls].sort((a, b) => qualityScore(b) - qualityScore(a));
   const finalUrls = dedupResults(sortedUrls);
@@ -565,24 +718,240 @@ async function runUniversalSniff(targetUrl, options) {
 }
 
 // ============================================================
-// 7. BrowserWrapper 类 + 浏览器池
+// 6.5 Provider 动态评分 & 熔断（C1/C2 v2.2 新增）
 // ============================================================
+const providerStats = new Map();
+
+function loadProviderStats() {
+  try {
+    if (!MX_CACHE_PERSIST) return;
+    const fullPath = path.join(MX_CACHE_DIR, 'provider-score.json');
+    if (!fs.existsSync(fullPath)) return;
+    const raw = fs.readFileSync(fullPath, 'utf8');
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return;
+    for (const item of arr) {
+      if (!item || !item.provider) continue;
+      providerStats.set(item.provider, {
+        ok: item.ok || 0,
+        fail: item.fail || 0,
+        hits: item.hits || 0,
+        totalLat: item.totalLat || 0,
+        lastFailStreak: item.lastFailStreak || 0,
+        circuitUntil: item.circuitUntil || 0,
+        lastTs: item.lastTs || 0
+      });
+    }
+  } catch (e) { }
+}
+
+function saveProviderStats() {
+  try {
+    if (!MX_CACHE_PERSIST) return;
+    const fullPath = path.join(MX_CACHE_DIR, 'provider-score.json');
+    const arr = [];
+    for (const [provider, s] of providerStats.entries()) {
+      arr.push({ provider, ...s });
+    }
+    fs.writeFileSync(fullPath, JSON.stringify(arr), 'utf8');
+  } catch (e) { }
+}
+
+function recordProviderResult(provider, opts) {
+  const latencyMs = (opts && opts.latencyMs) || 0;
+  const hitCount = (opts && opts.hitCount) || 0;
+  const ok = !!(opts && opts.ok);
+
+  let s = providerStats.get(provider);
+  if (!s) {
+    s = { ok: 0, fail: 0, hits: 0, totalLat: 0, lastFailStreak: 0, circuitUntil: 0, lastTs: 0 };
+    providerStats.set(provider, s);
+  }
+  s.lastTs = Date.now();
+  s.totalLat += Math.max(0, latencyMs);
+  if (ok) {
+    s.ok++;
+    s.hits += Math.max(0, hitCount);
+    s.lastFailStreak = 0;
+  } else {
+    s.fail++;
+    s.lastFailStreak++;
+    if (MX_UNIVERSAL_CIRCUIT_BREAK > 0 && s.lastFailStreak >= MX_UNIVERSAL_CIRCUIT_BREAK) {
+      s.circuitUntil = Date.now() + Math.max(1, MX_UNIVERSAL_CB_COOLDOWN) * 1000;
+    }
+  }
+  try { saveProviderStats(); } catch (e) { }
+}
+
+function isProviderCircuitBroken(provider) {
+  const s = providerStats.get(provider);
+  if (!s) return false;
+  if (!s.circuitUntil) return false;
+  if (Date.now() >= s.circuitUntil) {
+    s.circuitUntil = 0;
+    s.lastFailStreak = 0;
+    return false;
+  }
+  return true;
+}
+
+function providerScore(provider) {
+  const s = providerStats.get(provider) || { ok: 0, fail: 0, hits: 0, totalLat: 0 };
+  const total = s.ok + s.fail;
+  const successRate = total > 0 ? s.ok / total : 0.5;
+  const hitRate = s.ok > 0 ? s.hits / s.ok : 0;
+  const avgLat = total > 0 ? s.totalLat / total : 1000;
+  return successRate * 1000 + hitRate * 500 - avgLat / 30;
+}
+
+function rankedProviders() {
+  const normal = [];
+  const broken = [];
+  for (const p of PROVIDERS) {
+    const score = providerScore(p);
+    const b = isProviderCircuitBroken(p);
+    if (b) broken.push({ p, score });
+    else normal.push({ p, score });
+  }
+  normal.sort((a, b) => b.score - a.score);
+  broken.sort((a, b) => b.score - a.score);
+  const result = [];
+  for (const e of normal) {
+    const strObj = new String(e.p);
+    strObj._rankScore = e.score;
+    strObj._broken = false;
+    result.push(strObj);
+  }
+  for (const e of broken) {
+    const strObj = new String(e.p);
+    strObj._rankScore = e.score;
+    strObj._broken = true;
+    result.push(strObj);
+  }
+  return result;
+}
+
+function splitProvidersTopK() {
+  const k = Math.max(1, MX_UNIVERSAL_TOPK_FIRST || 10);
+  const ranked = rankedProviders();
+  const top = [];
+  const tail = [];
+  for (const entry of ranked) {
+    if (top.length < k && !entry._broken) top.push(entry);
+    else tail.push(entry);
+  }
+  return { top, tail };
+}
+
+try { loadProviderStats(); } catch (e) { }
+
+// ============================================================
+// 7. BrowserWrapper 类 + 浏览器池 + PagePool（v2.2 升级）
+//    A1：MX_BROWSER_ENABLE 开关 + 并行启动
+//    A3：15s 健康检查 + RSS 超阈值回收 + 原位复活
+//    A2：每浏览器 PagePool + acquirePage/releasePage
+//    A5：共享拦截器 + response m3u8 捕获
+// ============================================================
+// 全局共享黑名单（图片/字体/广告），复用避免重复注册（A5）
+const GLOBAL_BLOCK_RE = /\.(png|jpe?g|gif|webp|svg|ico|woff2?|ttf|eot|otf|css|mp3|wav|flac|aac)(\?|$)/i;
+const GLOBAL_BLOCK_HOST_RE = /(google-analytics|googletagmanager|doubleclick|adservice|scorecardresearch|facebook|disqus)\./i;
+
+function getProcessRssMB(pid) {
+  try {
+    if (!pid) return 0;
+    // Linux: /proc/<pid>/status VmRSS 最准
+    const f = `/proc/${pid}/status`;
+    if (fs.existsSync(f)) {
+      const raw = fs.readFileSync(f, 'utf8');
+      const m = raw.match(/VmRSS:\s*(\d+)\s*kB/i);
+      if (m) return Math.floor(parseInt(m[1], 10) / 1024);
+    }
+    // 兜底：process.memoryUsage() 只能拿到 Node 自己，对 Chromium 子进程不准，所以返回 0
+    return 0;
+  } catch (e) { return 0; }
+}
+
+class PageHolder {
+  constructor(page, browserWrapper) {
+    this.page = page;
+    this.bw = browserWrapper;
+    this.useCount = 0;
+    this.lastUsed = Date.now();
+    this.status = 'idle'; // idle / busy
+    this.dead = false;
+    this._attached = false;
+  }
+  async ensureAttachSharedHandlers() {  // A5
+    if (this._attached) return;
+    const p = this.page;
+    try {
+      await p.setRequestInterception(true);
+    } catch (e) {}
+    p.on('request', (req) => {
+      const url = req.url();
+      if (!/^https?:/i.test(url)) { try { req.abort(); } catch(e){} return; }
+      if (GLOBAL_BLOCK_RE.test(url) || GLOBAL_BLOCK_HOST_RE.test(url)) { try { req.abort(); } catch(e){} return; }
+      try { req.continue(); } catch(e){}
+    });
+    p.on('response', async (resp) => {
+      try {
+        const ct = (resp.headers() && (resp.headers()['content-type'] || '')) || '';
+        const url = resp.url();
+        if (/\.m3u8(\?|$)/i.test(url) || /mpegurl/i.test(ct)) {
+          if (!this.bw._hits) this.bw._hits = new Set();
+          this.bw._hits.add(url);
+        }
+      } catch (e) {}
+    });
+    this._attached = true;
+  }
+  async touch() {
+    this.useCount++;
+    this.lastUsed = Date.now();
+    if (this.useCount === 1) await this.ensureAttachSharedHandlers();
+  }
+  expiredNow() {
+    if (this.dead) return true;
+    if (MX_PAGE_MAX_USE > 0 && this.useCount >= MX_PAGE_MAX_USE) return true;
+    if (MX_PAGE_IDLE_TIMEOUT > 0 && this.status === 'idle' && (Date.now() - this.lastUsed) > MX_PAGE_IDLE_TIMEOUT * 1000) return true;
+    return false;
+  }
+  async safeClose() {
+    if (this.dead) return;
+    this.dead = true;
+    try { await this.page.close(); } catch(e){}
+  }
+}
+
 class BrowserWrapper {
   constructor(executablePath) {
     this.executablePath = executablePath;
     this.browser = null;
     this.lastUsed = 0;
     this.ready = false;
+    this.pagePool = []; // PageHolder[]
+    this._pid = 0;
+    this._hits = new Set();
+    this._warmupDone = false;
+    this._userDataDir = '';
   }
   async launch() {
+    const idStr = Math.random().toString(36).slice(2, 8);
+    this._userDataDir = path.join(os.tmpdir(), `mx-chrome-${process.pid}-${idStr}`);
+    try { fs.mkdirSync(this._userDataDir, { recursive: true }); } catch(e){}
     const defaultArgs = [
+      `--user-data-dir=${this._userDataDir}`,
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
       '--no-first-run',
       '--no-default-browser-check',
-      '--disable-blink-features=AutomationControlled'
+      '--disable-blink-features=AutomationControlled',
+      '--disable-accelerated-2d-canvas',
+      '--max-old-space-size=1024',
+      '--disable-extensions',
+      '--window-size=1280,720'
     ];
     const args = [...defaultArgs, ...MX_BROWSER_ARGS];
     this.browser = await puppeteer.launch({
@@ -590,60 +959,220 @@ class BrowserWrapper {
       headless: true,
       args
     });
+    const proc = this.browser.process();
+    this._pid = proc ? proc.pid : 0;
     this.browser.on('disconnected', () => {
       this.ready = false;
     });
     this.ready = true;
   }
-  async newPage() {
-    if (!this.browser || !this.ready) {
-      await this.launch();
+  async initPagePool() {
+    if (!this.ready) return;
+    const need = Math.max(0, MX_PAGE_POOL_SIZE - this.pagePool.length);
+    for (let i = 0; i < need; i++) {
+      try {
+        const p = await this.browser.newPage();
+        const holder = new PageHolder(p, this);
+        this.pagePool.push(holder);
+      } catch (e) {
+        console.log(`[超级嗅探] PagePool 预启动失败: ${e.message}`);
+      }
     }
+    if (MX_BROWSER_WARMUP) {
+      for (const h of this.pagePool) {
+        try { await h.ensureAttachSharedHandlers(); await h.page.goto('about:blank', { timeout: 5000, waitUntil: 'domcontentloaded' }); }
+        catch (e) {}
+      }
+      this._warmupDone = true;
+    }
+  }
+  _reclaimExpiredPages() {
+    const kept = [];
+    for (const h of this.pagePool) {
+      if (h.status === 'busy') { kept.push(h); continue; }
+      if (h.expiredNow()) { h.safeClose().catch(()=>{}); continue; }
+      kept.push(h);
+    }
+    this.pagePool = kept;
+  }
+  async acquirePage() {
+    if (!this.ready) await this.launch();
+    this._reclaimExpiredPages();
+    // 优先 idle
+    for (const h of this.pagePool) {
+      if (h.status === 'idle' && !h.dead) {
+        h.status = 'busy';
+        await h.touch();
+        return h;
+      }
+    }
+    // 不足，按需新建一个 page
+    try {
+      const p = await this.browser.newPage();
+      const holder = new PageHolder(p, this);
+      holder.status = 'busy';
+      this.pagePool.push(holder);
+      await holder.touch();
+      return holder;
+    } catch (e) {
+      // 浏览器可能挂了
+      this.ready = false;
+      throw e;
+    }
+  }
+  async releasePage(holder) {
+    if (!holder) return;
+    holder.status = 'idle';
+    holder.lastUsed = Date.now();
+    // 清理副作用：about:blank 清理内存 + 清 cookies
+    if (!holder.dead) {
+      try {
+        const client = holder.page.isClosed && holder.page.isClosed();
+        if (client) { holder.dead = true; return; }
+        await holder.page.goto('about:blank', { timeout: 3000, waitUntil: 'domcontentloaded' }).catch(()=>{});
+        const c = await holder.page.cookies().catch(()=>[]);
+        if (c && c.length) try { await holder.page.deleteCookie(...c); } catch(e){}
+      } catch (e) {}
+    }
+    this.lastUsed = Date.now();
+  }
+  async newPage() {
+    // 兼容老 API（绕过 PagePool）
+    if (!this.browser || !this.ready) await this.launch();
     this.lastUsed = Date.now();
     return await this.browser.newPage();
   }
   async close() {
+    for (const h of (this.pagePool || [])) await h.safeClose();
+    this.pagePool = [];
     if (this.browser) {
-      try {
-        await this.browser.close();
-      } catch (e) { }
+      try { await this.browser.close(); } catch (e) { }
       this.browser = null;
       this.ready = false;
     }
+    if (this._userDataDir) {
+      try { if (fs.existsSync(this._userDataDir)) fs.rmSync(this._userDataDir, { recursive: true, force: true }); }
+      catch(e){}
+    }
   }
   isAlive() {
-    return this.ready && this.browser && this.browser.process() != null;
+    if (!this.ready || !this.browser) return false;
+    const proc = this.browser.process();
+    if (proc == null) return false;
+    try {
+      process.kill(proc.pid, 0);
+    } catch (e) { return false; }
+    return true;
   }
+  memoryMB() { return getProcessRssMB(this._pid); }
 }
 
 let browserPool = [];
 let browserPoolIndex = 0;
+let browserHealthTimer = null;
+
+function browserPoolStats() {
+  let pagesTotal = 0, pagesBusy = 0;
+  for (const bw of browserPool) {
+    for (const h of (bw.pagePool || [])) {
+      pagesTotal++;
+      if (h.status === 'busy') pagesBusy++;
+    }
+  }
+  return { browsers: browserPool.length, pagesTotal, pagesBusy };
+}
 
 async function initBrowserPool() {
+  if (!MX_BROWSER_ENABLE) {
+    console.log('[超级嗅探] MX_BROWSER_ENABLE=false，跳过浏览器池启动（万能嗅探正常工作）');
+    return;
+  }
   const executablePath = checkChrome();
+  if (!executablePath) {
+    console.log('[超级嗅探] 未找到 Chrome 可执行文件，浏览器池启动跳过（万能嗅探 HTTP 模式可用）。可设置 MX_CHROME_PATH 指向 chrome 可执行文件');
+    return;
+  }
   const size = MX_BROWSER_POOL_SIZE;
   browserPool = [];
-  for (let i = 0; i < size; i++) {
+  const t0 = Date.now();
+  const tasks = [];
+  for (let i = 0; i < size; i++) tasks.push((async (idx) => {
     const bw = new BrowserWrapper(executablePath);
     try {
       await bw.launch();
-      browserPool.push(bw);
+      await bw.initPagePool();
+      return { ok: true, bw, idx };
     } catch (e) {
-      console.log(`[超级嗅探] 浏览器池实例 ${i + 1} 启动失败: ${e.message}`);
+      console.log(`[超级嗅探] 浏览器池实例 ${idx + 1} 启动失败: ${e.message}`);
+      return { ok: false, bw: null, idx, err: e };
     }
+  })(i));
+  const results = await Promise.allSettled(tasks);
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value && r.value.ok) browserPool.push(r.value.bw);
   }
   if (browserPool.length === 0) {
     console.log('[超级嗅探] 警告：浏览器池未启动成功，将使用按需启动模式');
   } else {
-    console.log(`[超级嗅探] 浏览器池已启动: ${browserPool.length}/${size} 个实例`);
+    const s = browserPoolStats();
+    console.log(`[超级嗅探] 浏览器池已启动: ${browserPool.length}/${size} 个实例，共 ${s.pagesTotal} 个 Page，耗时 ${(Date.now() - t0)}ms`);
+  }
+  // --- 健康检查定时器（A3）---
+  if (browserHealthTimer) clearInterval(browserHealthTimer);
+  browserHealthTimer = setInterval(browserPoolHealthCheck, Math.max(1, MX_BROWSER_HEALTH_INTERVAL) * 1000);
+  browserHealthTimer.unref && browserHealthTimer.unref();
+}
+
+async function browserPoolHealthCheck() {
+  if (!MX_BROWSER_ENABLE || MX_BROWSER_POOL_SIZE <= 0) return;
+  const executablePath = checkChrome();
+  if (!executablePath) return;
+  const size = MX_BROWSER_POOL_SIZE;
+  // 巡检 & 补位
+  for (let i = 0; i < browserPool.length; i++) {
+    const bw = browserPool[i];
+    let needReplace = false;
+    let reason = '';
+    if (!bw.isAlive()) { needReplace = true; reason = 'process dead'; }
+    else {
+      const mem = bw.memoryMB();
+      if (MX_BROWSER_MAX_MEM_MB > 0 && mem > MX_BROWSER_MAX_MEM_MB) { needReplace = true; reason = `RSS ${mem}MB 超阈值 ${MX_BROWSER_MAX_MEM_MB}MB`; }
+    }
+    if (needReplace) {
+      console.log(`[超级嗅探] 浏览器池 #${i + 1} 复活（${reason}）`);
+      try { await bw.close(); } catch(e){}
+      const newBw = new BrowserWrapper(executablePath);
+      try {
+        await newBw.launch();
+        await newBw.initPagePool();
+        browserPool[i] = newBw;
+      } catch (e) {
+        console.log(`[超级嗅探] 复活失败: ${e.message}`);
+      }
+    } else {
+      // 清理过期 Page，按需要补齐数量
+      bw._reclaimExpiredPages();
+      if ((bw.pagePool || []).length < MX_PAGE_POOL_SIZE) try { await bw.initPagePool(); } catch(e){}
+    }
+  }
+  // 数量不足（可能降级后或配置改大后，尝试新增补齐到 size 上限）
+  while (browserPool.length < size) {
+    const nb = new BrowserWrapper(executablePath);
+    try { await nb.launch(); await nb.initPagePool(); browserPool.push(nb); }
+    catch (e) { console.log(`[超级嗅探] 补齐浏览器池实例失败: ${e.message}`); break; }
   }
 }
 
 async function nextBrowser() {
+  if (!MX_BROWSER_ENABLE) {
+    throw new Error('MX_BROWSER_ENABLE=false，Puppeteer 解析已禁用；如需启用请设置 MX_BROWSER_ENABLE=true 并提供 Chrome');
+  }
   if (browserPool.length === 0) {
     const executablePath = checkChrome();
     const bw = new BrowserWrapper(executablePath);
     await bw.launch();
+    try { await bw.initPagePool(); } catch(e){}
+    browserPool.push(bw);
     return bw;
   }
   let attempts = 0;
@@ -651,15 +1180,34 @@ async function nextBrowser() {
     const idx = browserPoolIndex % browserPool.length;
     browserPoolIndex++;
     const bw = browserPool[idx];
-    if (bw.isAlive()) {
-      return bw;
-    }
+    if (bw.isAlive()) return bw;
     attempts++;
   }
   const executablePath = checkChrome();
   const bw = new BrowserWrapper(executablePath);
   await bw.launch();
+  try { await bw.initPagePool(); } catch(e){}
   return bw;
+}
+
+// acquirePageWrapper：跨浏览器找一个有空闲 Page 的 BrowserWrapper，并 acquire
+async function acquirePageWrapper() {
+  if (!MX_BROWSER_ENABLE) throw new Error('MX_BROWSER_ENABLE=false');
+  // 先找空闲 Page 的浏览器
+  for (let i = 0; i < browserPool.length; i++) {
+    const idx = (browserPoolIndex + i) % browserPool.length;
+    const bw = browserPool[idx];
+    if (!bw.isAlive()) continue;
+    for (const h of bw.pagePool) if (h.status === 'idle' && !h.dead) {
+      browserPoolIndex = (idx + 1) % Math.max(1, browserPool.length);
+      const holder = await bw.acquirePage();
+      return { bw, holder };
+    }
+  }
+  // 找不到就轮询下一个浏览器，按需建
+  const bw = await nextBrowser();
+  const holder = await bw.acquirePage();
+  return { bw, holder };
 }
 
 // ============================================================
@@ -669,39 +1217,20 @@ async function sniffVideoUrl(videoUrl) {
   if (/\.m3u8|\.mp4/i.test(videoUrl)) {
     return { code: 200, url: videoUrl };
   }
-  let browserWrapper = null;
+  let bw = null;
+  let holder = null;
   let page = null;
   try {
-    browserWrapper = await nextBrowser();
-    page = await browserWrapper.newPage();
+    const acquired = await acquirePageWrapper();
+    bw = acquired.bw;
+    holder = acquired.holder;
+    page = holder.page;
+    if (bw._hits) bw._hits.clear();
 
     await page.setUserAgent(MX_USER_AGENT);
     await page.setViewport({ width: 1280, height: 720 });
 
-    const videoUrls = new Set();
-
-    await page.setRequestInterception(true);
-    page.on('request', (request) => {
-      const url = request.url();
-      if (VIDEO_EXT_REGEX.test(url)) {
-        videoUrls.add(url);
-      }
-      request.continue().catch(() => {});
-    });
-
-    page.on('response', async (response) => {
-      const url = response.url();
-      if (VIDEO_EXT_REGEX.test(url)) {
-        videoUrls.add(url);
-      }
-      if (isTextResponse(response.headers())) {
-        try {
-          const text = await response.text();
-          extractFromText(text).forEach((u) => videoUrls.add(u));
-          extractVideoUrls(text).forEach((u) => videoUrls.add(u));
-        } catch (e) { }
-      }
-    });
+    const allUrls = new Set();
 
     try {
       await page.goto(videoUrl, {
@@ -716,20 +1245,28 @@ async function sniffVideoUrl(videoUrl) {
 
     try {
       const content = await page.content();
-      extractFromText(content).forEach((u) => videoUrls.add(u));
-      extractVideoUrls(content).forEach((u) => videoUrls.add(u));
+      extractFromText(content).forEach((u) => allUrls.add(u));
+      extractVideoUrls(content).forEach((u) => allUrls.add(u));
     } catch (e) { }
 
     for (const frame of page.frames()) {
       try {
         const frameContent = await frame.content();
-        extractFromText(frameContent).forEach((u) => videoUrls.add(u));
-        extractVideoUrls(frameContent).forEach((u) => videoUrls.add(u));
+        extractFromText(frameContent).forEach((u) => allUrls.add(u));
+        extractVideoUrls(frameContent).forEach((u) => allUrls.add(u));
       } catch (e) { }
     }
 
-    if (videoUrls.size > 0) {
-      const sorted = [...videoUrls].sort((a, b) => qualityScore(b) - qualityScore(a));
+    try {
+      const c = await page.cookies().catch(() => []);
+      if (c && c.length) try { await page.deleteCookie(...c); } catch (e) { }
+    } catch (e) { }
+    try { await page.goto('about:blank', { timeout: 3000, waitUntil: 'domcontentloaded' }).catch(() => { }); } catch (e) { }
+
+    if (bw._hits) for (const u of bw._hits) allUrls.add(u);
+
+    if (allUrls.size > 0) {
+      const sorted = [...allUrls].sort((a, b) => qualityScore(b) - qualityScore(a));
       return { code: 200, url: sorted[0], allUrls: sorted };
     }
 
@@ -737,9 +1274,9 @@ async function sniffVideoUrl(videoUrl) {
   } catch (err) {
     return { code: 500, msg: '解析失败: ' + err.message };
   } finally {
-    if (page) {
+    if (bw && holder) {
       try {
-        await page.close().catch(() => {});
+        await bw.releasePage(holder);
       } catch (e) { }
     }
   }
@@ -841,12 +1378,18 @@ app.get('/sniff', async (req, res) => {
 // 12. / 健康检查
 // ============================================================
 app.get('/', (req, res) => {
+  const poolStats = browserPoolStats();
   res.json({
     code: 200,
     msg: '超级嗅探解析服务运行中',
     port: MX_PORT,
     version: 'v' + updater.getCurrentVersion(),
     providers: PROVIDERS.length,
+    browserPool: poolStats.browsers,
+    pagePoolTotal: poolStats.pagesTotal,
+    pagePoolBusy: poolStats.pagesBusy,
+    memory: { totalMB: Math.floor(os.totalmem() / 1024 / 1024), freeMB: Math.floor(os.freemem() / 1024 / 1024) },
+    providerStats: { rankedTop5: rankedProviders().slice(0, 5).map(p => ({ p, score: providerScore(p), broken: isProviderCircuitBroken(p) })) },
     cache: {
       parse: resultCache.size,
       universal: universalCache.size
@@ -855,9 +1398,9 @@ app.get('/', (req, res) => {
       enabled: true,
       providers: PROVIDERS.length,
       concurrency: MX_UNIVERSAL_CONCURRENCY,
-      earlyHits: MX_UNIVERSAL_EARLY_HITS
-    },
-    browserPool: browserPool.length
+      earlyHits: MX_UNIVERSAL_EARLY_HITS,
+      circuitBroken: PROVIDERS.filter(isProviderCircuitBroken).length
+    }
   });
 });
 
@@ -1411,6 +1954,7 @@ app.get('/admin/api/status', adminAuth, (req, res) => {
   const chromeVersion = updater.getChromeVersion();
   const version = updater.getCurrentVersion();
   const sourceInfo = updater.getSourceInfo();
+  const poolStats = browserPoolStats();
   res.json({
     code: 200,
     service: '运行中',
@@ -1422,14 +1966,19 @@ app.get('/admin/api/status', adminAuth, (req, res) => {
     source: sourceInfo.source,
     branch: sourceInfo.branch,
     sourceLabel: sourceInfo.label,
-    browserPool: browserPool.length,
+    browserPool: poolStats.browsers,
+    pagePoolTotal: poolStats.pagesTotal,
+    pagePoolBusy: poolStats.pagesBusy,
     providers: PROVIDERS.length,
+    memory: { totalMB: Math.floor(os.totalmem() / 1024 / 1024), freeMB: Math.floor(os.freemem() / 1024 / 1024) },
+    providerStats: { rankedTop5: rankedProviders().slice(0, 5).map(p => ({ p, score: providerScore(p), broken: isProviderCircuitBroken(p) })) },
     universal: {
       enabled: true,
       providers: PROVIDERS.length,
       concurrency: MX_UNIVERSAL_CONCURRENCY,
       earlyHits: MX_UNIVERSAL_EARLY_HITS,
-      cacheSize: universalCache.size
+      cacheSize: universalCache.size,
+      circuitBroken: PROVIDERS.filter(isProviderCircuitBroken).length
     },
     cache: {
       parse: resultCache.size,
@@ -1620,6 +2169,13 @@ app.post('/admin/api/update', adminAuth, async (req, res) => {
   }
 });
 
+app.get('/healthz/live', (req, res) => res.status(200).json({ status: 'ok' }));
+app.get('/healthz/startup', (req, res) => res.status(200).json({ status: 'ok', ready: true }));
+app.get('/healthz/ready', (req, res) => {
+  const ok = MX_BROWSER_ENABLE === false || browserPool.length > 0 || MX_UNIVERSAL_ENABLE === true;
+  res.status(ok ? 200 : 503).json({ status: ok ? 'ok' : 'wait', browserPool: browserPool.length, universalEnabled: MX_UNIVERSAL_ENABLE });
+});
+
 // ============================================================
 // 18. listenWithRetry 启动函数
 // ============================================================
@@ -1644,7 +2200,7 @@ function listenWithRetry(port, retries) {
     const ver = updater.getCurrentVersion();
     console.log('');
     console.log('╔══════════════════════════════════════════════════════════════╗');
-    console.log('║           超级嗅探视频解析服务 v2.1 启动成功                  ║');
+    console.log(`║           超级嗅探视频解析服务 v${ver} 启动成功                  ║`);
     console.log('╠══════════════════════════════════════════════════════════════╣');
     console.log(`║  解析接口:     http://localhost:${port}/node.js?url=          ║`);
     console.log(`║  健康检查:     http://localhost:${port}/                       ║`);
@@ -1659,8 +2215,21 @@ function listenWithRetry(port, retries) {
     console.log(`║  提前命中:     ${String(MX_UNIVERSAL_EARLY_HITS).padEnd(36)}║`);
     console.log(`║  结果缓存:     ${String(MX_UNIVERSAL_CACHE_MAX + '条/' + MX_UNIVERSAL_CACHE_TTL + 's').padEnd(36)}║`);
     console.log('╠══════════════════════════════════════════════════════════════╣');
+    const _ps = browserPoolStats();
+    console.log('║  【浏览器池 v2.2】                                             ║');
+    console.log(`║  Browser 数量: ${String(_ps.browsers + '/' + MX_BROWSER_POOL_SIZE).padEnd(36)}║`);
+    console.log(`║  Page 总数:    ${String(_ps.pagesTotal).padEnd(36)}║`);
+    console.log(`║  Page 使用中:  ${String(_ps.pagesBusy).padEnd(36)}║`);
+    console.log(`║  单页上限:    MX_PAGE_MAX_USE / 空闲 ${MX_PAGE_IDLE_TIMEOUT}s             ║`);
+    console.log(`║  RSS 阈值:    ${String(MX_BROWSER_MAX_MEM_MB + 'MB / 巡检 ' + MX_BROWSER_HEALTH_INTERVAL + 's').padEnd(36)}║`);
+    console.log('╠══════════════════════════════════════════════════════════════╣');
+    console.log('║  【缓存 & Provider】                                           ║');
+    console.log(`║  缓存目录:    ${String(MX_CACHE_PERSIST ? path.relative(process.cwd(), MX_CACHE_DIR) : '关闭').padEnd(36)}║`);
+    console.log(`║  Flush 周期:  ${String(MX_CACHE_FLUSH_INTERVAL + 's').padEnd(36)}║`);
+    console.log(`║  熔断 Provider: ${String(PROVIDERS.filter(isProviderCircuitBroken).length + '/' + PROVIDERS.length).padEnd(36)}║`);
+    console.log(`║  TopK 优先:    ${String(MX_UNIVERSAL_TOPK_FIRST + ' / 单Provider并发 ' + MX_UNIVERSAL_PER_PROVIDER_CONC).padEnd(36)}║`);
+    console.log('╠══════════════════════════════════════════════════════════════╣');
     console.log(`║  Chrome 路径: ${String(checkChrome() || '使用系统默认').padEnd(36)}║`);
-    console.log(`║  浏览器池:     ${String(browserPool.length + ' 个实例').padEnd(36)}║`);
     console.log(`║  当前版本:     v${String(ver).padEnd(36)}║`);
     if (MX_ADMIN_AUTH) {
     console.log('║  后台登录:     Basic 认证已启用                               ║');

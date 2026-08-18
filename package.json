@@ -1,12 +1,14 @@
 {
   "name": "super-sniffer",
-  "version": "2.1.0",
-  "description": "超级嗅探 - 基于 Puppeteer 的视频 m3u8 地址解析服务 + 多线程万能嗅探（18个第三方解析接口并发、去重、SSE流式进度），内置管理后台、在线更新（稳定版/先行版），所有配置通过 MX_ 前缀环境变量管理",
+  "version": "2.2.0",
+  "description": "超级嗅探 - 基于 Puppeteer 的视频 m3u8 地址解析服务 + 多线程万能嗅探（18个第三方解析接口并发、去重、SSE流式进度）。v2.2 升级：MX_BROWSER_ENABLE 开关 + 浏览器池并行启动 + PagePool 预建复用 + 15s 健康检查+RSS回收+原位复活 + LRU 缓存 JSONL 持久化（重启热恢复）+ Provider 动态评分/熔断/Top10 优先 + 低内存自动降级 + /healthz/live|startup|ready 三路探针。内置管理后台、在线更新（稳定版/先行版），所有配置通过 MX_ 前缀环境变量管理",
   "main": "node.js",
   "scripts": {
     "start": "node node.js",
     "dev": "node node.js",
-    "check": "node --check node.js && node --check update.js"
+    "setup": "bash 1.sh",
+    "check": "node --check node.js && node --check update.js",
+    "doctor": "node -e \"const f=process.env.MX_CHROME_PATH||require('path').join(process.cwd(),'chrome-linux64/chrome');require('fs').existsSync(f)?console.log('✅ Chrome 已就绪:',f):console.log('❌ Chrome 未安装:',f)\""
   },
   "keywords": [
     "m3u8",
@@ -21,7 +23,12 @@
     "lru",
     "universal-sniff",
     "vip-parser",
-    "sse"
+    "sse",
+    "browser-pool",
+    "page-pool",
+    "circuit-breaker",
+    "health-check",
+    "persistence"
   ],
   "author": "MXTX",
   "license": "MIT",

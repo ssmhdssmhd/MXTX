@@ -41,6 +41,13 @@ if [ -x "$CHROME_BIN" ] && "$CHROME_BIN" --version >/dev/null 2>&1; then
     exit 0
 fi
 
+# 1.5 检查 MX_CHROME_PATH 指定的路径是否已存在
+MX_CHROME_CHECK="${MX_CHROME_PATH:-./chrome-linux64/chrome}"
+if [ -f "$MX_CHROME_CHECK" ]; then
+    echo "Chrome 已存在，跳过下载"
+    exit 0
+fi
+
 # 2. 查找浏览器压缩包（支持多种格式）
 CANDIDATES=(
     "chrome-linux64.tar.xz"
