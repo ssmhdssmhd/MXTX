@@ -1,6 +1,10 @@
-# 超级嗅探 (Super Sniffer)
+# 超级嗅探 (Super Sniffer) v2
 
 基于 **PHP + Node.js (Puppeteer)** 的视频 m3u8 地址解析服务。输入视频页面链接，自动嗅探并返回页面中的 `.m3u8` 播放地址。
+
+v2 版本在保持原有功能的基础上，重点做了 **性能大幅优化** 和 **统一的 MX_ 前缀环境变量配置**。
+
+---
 
 ## 功能特性
 
@@ -9,28 +13,51 @@
 - 四种提取方式：网络请求拦截、响应体扫描、页面内容扫描、iframe 扫描
 - 返回标准 JSON 格式，便于前端播放器直接对接
 - 支持带查询参数的 m3u8 地址（如 `index.m3u8?token=xxx`）
-- 内置管理后台，支持在线更新（浏览器更新 / 源码更新独立进行，一键升级）
+- 内置管理后台（支持 Basic Auth 账号密码保护），支持在线更新（浏览器更新 / 源码更新独立进行，一键升级）
+- 所有配置通过 **MX_ 前缀的环境变量** 集中管理（向下兼容旧变量名）
+
+### 🚀 v2 性能优化（相比 v1）
+
+| 优化项 | 说明 | 预计性能提升 |
+|--------|------|-------------|
+| **浏览器单例池** | 服务启动时一次性启动 1~N 个 Chrome 实例，每次解析不再 `launch/close` | ⭐⭐⭐⭐⭐ 首解节省 1~3s |
+| **Page 池复用** | Page 用完放回空闲池（about:blank 释放内存），下次优先复用 | ⭐⭐⭐ 单次解析快 200~800ms |
+| **找到即返回** | 请求/响应拦截一旦捕获到 m3u8 立即结束等待，不再傻等 `EXTRA_WAIT` | ⭐⭐⭐⭐⭐ 快的站 <1s 返回 |
+| **LRU 结果缓存** | 相同 URL 在 TTL 内直接返回缓存，不消耗浏览器资源 | ⭐⭐⭐⭐⭐ 重复请求 = 1ms 级 |
+| **信号量并发控制** | 限制同时解析数（默认 5），队列超时报错，防 OOM | ⭐⭐⭐ 稳定性极大提升 |
+| **资源屏蔽** | 请求拦截自动 abort image / font / media，省带宽加速加载 | ⭐⭐⭐ 单次省几百毫秒 |
+| **PHP 层缓存** | `api.php` 本地文件缓存，相同请求连 Node.js 都不调用 | ⭐⭐⭐⭐ PHP 层直接毫秒级返回 |
+| **后台 Basic Auth** | 管理后台支持账号密码，之前任何人可访问更新 | ⭐⭐⭐ 安全性 |
+
+---
 
 ## 系统要求
 
 - Node.js >= 18.0.0
 - PHP >= 7.0（仅前端接口需要）
-- Chrome / Chromium（项目内已打包 `chrome-linux64`，或使用系统浏览器）
+- Chrome / Chromium（项目内已打包 `chrome-linux64`，或使用系统浏览器，通过 `MX_CHROME_PATH` 指定）
+
+---
 
 ## 项目结构
 
 ```
 超级嗅探/
-├── 1.sh             # 一键解压浏览器脚本
-├── api.php          # PHP 前端接口（转发请求、提取 m3u8）
-├── node.js          # Node.js 解析服务（Express + Puppeteer）
-├── update.js        # 在线更新模块（浏览器/源码独立更新）
-├── admin.html       # 管理后台页面
-├── package.json     # Node.js 依赖配置
-├── .user.ini        # PHP 运行配置
-├── chrome-linux64/  # 解压后的 Chrome 浏览器（由 1.sh 生成）
-└── node_modules/    # Node.js 依赖
+├── .env.example      # MX_ 环境变量配置示例（复制为 .env 使用）
+├── 1.sh              # 一键解压浏览器脚本
+├── api.php           # PHP 前端接口（转发请求、提取 m3u8，带本地缓存）
+├── node.js           # Node.js 解析服务（Express + Puppeteer + 浏览器池 + 缓存）
+├── update.js         # 在线更新模块（浏览器/源码独立更新，MX_ 变量支持）
+├── admin.html        # 管理后台页面
+├── package.json      # Node.js 依赖配置（v2.0.0）
+├── .user.ini         # PHP 运行配置
+├── README.md         # 本文档
+├── CHANGELOG.md      # 更新日志
+├── chrome-linux64/   # 解压后的 Chrome 浏览器（由 1.sh 生成）
+└── node_modules/     # Node.js 依赖
 ```
+
+---
 
 ## 快速开始
 
@@ -54,7 +81,7 @@ chmod +x 1.sh && ./1.sh
 也可以使用系统已安装的 Chrome，通过环境变量指定：
 
 ```bash
-export CHROME_PATH="/usr/bin/google-chrome"
+export MX_CHROME_PATH="/usr/bin/google-chrome-stable"
 ```
 
 ### 2. 安装依赖
@@ -63,37 +90,121 @@ export CHROME_PATH="/usr/bin/google-chrome"
 npm install
 ```
 
-### 3. 启动 Node.js 解析服务
+### 3. （可选）配置环境变量
+
+复制 `.env.example` 为 `.env` 并修改，或直接在启动时注入：
 
 ```bash
+cp .env.example .env
+# 编辑 .env 设置端口、后台账号密码等
+```
+
+**至少强烈建议设置后台账号密码：**
+
+```
+MX_ADMIN_USER=your_name
+MX_ADMIN_PASS=your_strong_password
+```
+
+### 4. 启动 Node.js 解析服务
+
+```bash
+# 最简启动（使用默认配置）
 npm start
-# 或
-node node.js
+
+# 或带自定义配置（推荐）
+MX_PORT=8080 \
+MX_ADMIN_USER=admin \
+MX_ADMIN_PASS=change_me \
+MX_CACHE_TTL=3600 \
+MX_MAX_CONCURRENT=8 \
+  node node.js
 ```
 
-默认监听 `1314` 端口，可通过环境变量修改：
+默认监听 `1314` 端口，所有可配置项见下文 **环境变量** 章节。
 
-```bash
-PORT=8080 node node.js
-```
-
-### 4. 配置 PHP 前端接口
+### 5. 配置 PHP 前端接口
 
 将 `api.php` 部署到 PHP 环境（如 Nginx + PHP-FPM），通过环境变量指定解析服务地址：
 
 ```bash
 # 默认地址为 http://122.51.166.115:1314
-# 如需修改，设置环境变量 PLAYER_HOST
-export PLAYER_HOST="http://127.0.0.1:1314"
+# 如需修改，设置环境变量 MX_PLAYER_HOST（或兼容旧的 PLAYER_HOST）
+export MX_PLAYER_HOST="http://127.0.0.1:1314"
 ```
+
+**Nginx FastCGI 注入示例：**
+
+```nginx
+location ~ \.php$ {
+    fastcgi_pass unix:/run/php/php8.1-fpm.sock;
+    fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+    # 注入 MX 环境变量
+    fastcgi_param MX_PLAYER_HOST "http://127.0.0.1:1314";
+    fastcgi_param MX_PHP_CACHE_ENABLE "1";
+    fastcgi_param MX_PHP_CACHE_TTL "1800";
+    include fastcgi_params;
+}
+```
+
+---
+
+## 环境变量（全部以 MX_ 开头）
+
+### Node.js 服务专属
+
+| 分类 | 变量名 | 默认值 | 兼容旧名 | 说明 |
+|------|--------|--------|---------|------|
+| **服务** | `MX_PORT` | `1314` | `PORT` | 监听端口 |
+| **服务** | `MX_HOST` | `0.0.0.0` | - | 监听网卡（`127.0.0.1` 仅本地） |
+| **后台** | `MX_ADMIN_USER` | 空 | - | 后台 Basic Auth 用户名 |
+| **后台** | `MX_ADMIN_PASS` | 空 | - | 后台 Basic Auth 密码 |
+| **浏览器** | `MX_CHROME_PATH` | `./chrome-linux64/chrome` | `CHROME_PATH` | Chrome 可执行路径 |
+| **浏览器** | `MX_CHROME_HEADLESS` | `true` | - | 是否无头 |
+| **浏览器** | `MX_BROWSER_POOL_SIZE` | `1` | - | 浏览器实例数（1~3） |
+| **浏览器** | `MX_PAGE_POOL_SIZE` | `8` | - | 单浏览器 Page 池大小 |
+| **浏览器** | `MX_CHROME_ARGS` | 空 | - | 额外启动参数（JSON 数组字符串） |
+| **嗅探** | `MX_PARSE_TIMEOUT` | `30000` | `PARSE_TIMEOUT` | 解析总超时（毫秒） |
+| **嗅探** | `MX_EXTRA_WAIT` | `2000` | `EXTRA_WAIT` | 加载后额外等待（毫秒，找到即返回时可被跳过） |
+| **嗅探** | `MX_EARLY_RETURN` | `true` | - | 找到 m3u8 即返回（性能核心） |
+| **嗅探** | `MX_USER_AGENT` | Chrome 122 UA | - | 自定义 UA |
+| **嗅探** | `MX_VIEWPORT_WIDTH` | `1280` | - | 视口宽 |
+| **嗅探** | `MX_VIEWPORT_HEIGHT` | `720` | - | 视口高 |
+| **嗅探** | `MX_SNIFF_RESPONSE_BODY` | `true` | - | 是否扫描响应体 |
+| **嗅探** | `MX_SNIFF_IFRAME` | `true` | - | 是否扫描 iframe |
+| **缓存** | `MX_CACHE_ENABLE` | `true` | - | 是否启用 LRU 结果缓存 |
+| **缓存** | `MX_CACHE_TTL` | `1800` | - | 缓存 TTL（秒） |
+| **缓存** | `MX_CACHE_MAX` | `500` | - | 最大缓存条目（超量淘汰最久未用） |
+| **并发** | `MX_MAX_CONCURRENT` | `5` | - | 最大同时解析数 |
+| **并发** | `MX_REQUEST_QUEUE_TIMEOUT` | `90000` | - | 请求排队超时（毫秒） |
+| **更新** | `MX_GITHUB_OWNER` | `ssmhdssmhd` | `GITHUB_OWNER` | GitHub 用户名 |
+| **更新** | `MX_GITHUB_REPO` | `MXTX` | `GITHUB_REPO` | GitHub 仓库名 |
+| **更新** | `MX_GITHUB_TOKEN` | 空 | `GITHUB_TOKEN` | GitHub Token（私有仓库/限流） |
+| **更新** | `MX_PROXY` | 空 | - | 下载更新代理（如 `http://127.0.0.1:7890`） |
+
+### PHP（api.php）专属
+
+| 变量名 | 默认值 | 兼容旧名 | 说明 |
+|--------|--------|---------|------|
+| `MX_PLAYER_HOST` | `http://122.51.166.115:1314` | `PLAYER_HOST` | Node.js 解析服务地址 |
+| `MX_PHP_TIMEOUT` | `30` | - | cURL 总执行超时（秒） |
+| `MX_PHP_CONNECT_TIMEOUT` | `3` | - | cURL 连接超时（秒） |
+| `MX_PHP_CACHE_ENABLE` | `1` | - | 本地文件缓存开关 |
+| `MX_PHP_CACHE_TTL` | `1800` | - | 缓存 TTL（秒） |
+| `MX_PHP_CACHE_DIR` | `./.mx_cache` | - | 缓存目录 |
+| `MX_PHP_SSL_VERIFY` | `0` | - | 是否校验 SSL 证书 |
+
+---
 
 ## 管理后台 & 在线更新
 
-启动服务后，浏览器访问 **`http://<服务器IP>:1314/admin`** 进入管理后台。
+启动服务后，浏览器访问 **`http://<服务器IP>:<端口>/admin`** 进入管理后台。
+
+如果设置了 `MX_ADMIN_USER` / `MX_ADMIN_PASS`，浏览器会弹出登录框要求输入账号密码。
 
 ### 后台功能
 
-- **服务状态**：实时显示服务运行状态、监听端口、Chrome 版本、当前版本
+- **服务状态**：实时显示服务运行状态、监听端口、Chrome 版本、当前版本、**缓存命中率、并发数、浏览器池大小**
 - **更新源切换**：稳定版（`main` 分支）/ 先行版（`cs1` 分支）自由切换
 - **浏览器更新**：仅更新 Chrome 浏览器，不影响源码与服务逻辑
 - **源码更新**：仅更新项目源码（`node.js`、`api.php`、`admin.html` 等），不影响浏览器
@@ -101,45 +212,20 @@ export PLAYER_HOST="http://127.0.0.1:1314"
 
 ### 更新源（稳定版 / 先行版）
 
-后台支持两种更新源，用户可自由选择，更新到对应分支版本：
-
 | 更新源 | 分支 | 说明 |
 |--------|------|------|
 | 稳定版 | `main` | 稳定发布，旧包，适合生产环境 |
 | 先行版 | `cs1` | 先行体验，新包，含最新功能 |
 
-- 切换更新源后，检查更新与执行更新均基于所选分支
-- 更新源配置持久化到 `update-config.json`，重启后仍生效
-- 更新包按分支独立命名与发布：先行版资产带 `-cs1` 后缀（如 `super-sniffer-source_1.3.0-cs1.zip`）
-
 ### 更新机制
 
-- 更新源为 GitHub Releases（`ssmhdssmhd/MXTX`），源码包与浏览器包独立发布
+- 更新源为 GitHub Releases（默认 `ssmhdssmhd/MXTX`），源码包与浏览器包独立发布
 - 浏览器更新与源码更新**互不干扰**，各自下载、解压、替换、验证
 - 更新前自动备份，更新后自动验证；验证失败自动回滚到旧版本
-- 源码更新完成后服务自动重启，无需手动操作
+- 源码更新完成后服务自动重启（v2 会先优雅关闭浏览器池再重启，避免孤儿进程）
+- 支持 `MX_PROXY` 环境变量为更新下载设置代理
 
-### 更新接口
-
-```
-GET  /admin                        # 管理后台页面
-GET  /admin/api/status             # 服务状态
-GET  /admin/api/update-source      # 获取当前更新源
-POST /admin/api/update-source      # 切换更新源（body: {"source":"stable"|"beta"}）
-GET  /admin/api/check-update       # 检查更新（对比所选分支最新版本）
-POST /admin/api/update             # 执行更新（body: {"type":"browser"|"source"|"all"}）
-```
-
-### 更新源配置
-
-默认更新源为 `ssmhdssmhd/MXTX`，可通过环境变量修改：
-
-```bash
-export GITHUB_OWNER="你的用户名"
-export GITHUB_REPO="你的仓库名"
-# 私有仓库需要 Token
-export GITHUB_TOKEN="ghp_xxx"
-```
+---
 
 ## API 接口
 
@@ -153,20 +239,28 @@ GET /node.js?url=<视频页面地址>
 |------|------|------|------|
 | url  | string | 是 | 视频页面链接（需 URL 编码） |
 
+**Response Headers：**
+- `X-Cache: HIT`        = 命中 Node.js LRU 缓存，直接返回
+- `X-Cache: MISS`       = 未命中，实际执行浏览器解析
+- `X-Cache: DIRECT-M3U8`= 传入本身就是 m3u8，直接返回
+
 ### 返回格式
 
-```json
+```jsonc
 // 解析成功
-{"code":200,"url":"https://example.com/video/index.m3u8"}
+{ "code": 200, "url": "https://example.com/video/index.m3u8?token=xxx" }
 
-// 缺少参数
-{"code":400,"msg":"请提供需要解析的链接"}
+// 缺少参数 / 格式错
+{ "code": 400, "msg": "请提供需要解析的链接" }
 
 // 未找到播放链接
-{"code":404,"msg":"未找到播放链接"}
+{ "code": 404, "msg": "未找到播放链接" }
+
+// 并发排队超时
+{ "code": 500, "msg": "解析失败: 请求排队超时（队列积压，当前并发上限 5）" }
 
 // 服务异常
-{"code":500,"msg":"解析失败: ..."}
+{ "code": 500, "msg": "解析失败: ..." }
 ```
 
 ### PHP 前端接口
@@ -175,31 +269,31 @@ GET /node.js?url=<视频页面地址>
 GET /api.php?url=<视频页面地址>
 ```
 
-返回格式与 Node.js 服务一致。
+返回格式与 Node.js 服务一致；额外 Response Header：
+- `X-Cache: HIT` = 命中 PHP 本地文件缓存
 
-## 环境变量
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| PORT | 1314 | Node.js 服务监听端口 |
-| CHROME_PATH | `./chrome-linux64/chrome` | Chrome 可执行文件路径 |
-| PARSE_TIMEOUT | 30000 | 页面加载超时（毫秒） |
-| EXTRA_WAIT | 3000 | 加载完成后额外等待时间（毫秒） |
-| PLAYER_HOST | `http://122.51.166.115:1314` | PHP 前端指向的解析服务地址 |
-| GITHUB_OWNER | `ssmhdssmhd` | 在线更新的 GitHub 用户名 |
-| GITHUB_REPO | `MXTX` | 在线更新的 GitHub 仓库名 |
-| GITHUB_TOKEN | 空 | GitHub Token（私有仓库更新需要） |
+---
 
 ## 常见问题
 
-**Q: 提示 `无法获取解析页面`？**
-A: 请确认 Node.js 解析服务已启动，且 `api.php` 中的 `PLAYER_HOST` 指向正确的服务地址。
+**Q: 对比 v1，性能提升到底有多大？**
+A: 保守估计：
+- 第一次解析一个新站：v1 大概 5~10 秒（启动 Chrome 2s + 加载 3s + 等待 3s），v2 大概 2~5 秒（Chrome 已启动 + 资源屏蔽 + 找到即返回 可快到 1s 内）
+- 第二次请求同一个 URL：v1 还是 5~10 秒，v2 毫秒级（缓存命中）
 
-**Q: 提示 `未找到播放链接`？**
-A: 部分视频网站需要登录或存在反爬机制，可尝试更换视频源，或调整 `EXTRA_WAIT` 等待时间。
+**Q: 后台一直弹登录框？**
+A: 你开启了 `MX_ADMIN_USER/PASS`，请输入正确的账号密码。如果忘记，去掉这两个环境变量重启即可关闭认证。
+
+**Q: 内存占用会不会越来越大？**
+A: v2 做了多重保护：LRU 缓存上限 500 条、Page 池上限 8/浏览器、并发信号量 5。正常使用内存 500MB~1.5GB 足够。
+
+**Q: 并发满了请求会怎样？**
+A: 进入队列排队；排队超过 `MX_REQUEST_QUEUE_TIMEOUT`（默认 90 秒）会直接返回 `请求排队超时`，避免无限积压。
 
 **Q: 提示 `解析失败: ...`？**
-A: 请检查 Chrome 是否可用。项目内已打包 `chrome-linux64`，也可通过 `CHROME_PATH` 指定系统 Chrome。
+A: 请检查 Chrome 是否可用。项目内已打包 `chrome-linux64`，也可通过 `MX_CHROME_PATH` 指定系统 Chrome。
+
+---
 
 ## 许可证
 
