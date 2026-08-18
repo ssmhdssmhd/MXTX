@@ -24,8 +24,12 @@ const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
 
+const updater = require('./update');
+
 const app = express();
 const PORT = parseInt(process.env.PORT || '1314', 10);
+
+app.use(express.json());
 
 // Chrome 可执行文件路径（优先使用项目内打包的 Chrome，可被环境变量覆盖）
 const CHROME_PATH =
@@ -200,7 +204,122 @@ app.get('/', (req, res) => {
   res.json({ code: 200, msg: '超级嗅探解析服务运行中', port: PORT });
 });
 
+// ============================================================
+// 后台管理 & 在线更新
+// ============================================================
+
+// 后台管理页面
+app.get('/admin', (req, res) => {
+  const adminFile = path.join(__dirname, 'admin.html');
+  if (fs.existsSync(adminFile)) {
+    res.sendFile(adminFile);
+  } else {
+    res.status(404).send('后台页面不存在，请重新更新源码');
+  }
+});
+
+// 后台状态接口
+app.get('/admin/api/status', (req, res) => {
+  const chromeVersion = updater.getChromeVersion();
+  const version = updater.getCurrentVersion();
+  res.json({
+    code: 200,
+    service: '运行中',
+    port: PORT,
+    version,
+    chromeVersion,
+    chromeInstalled: chromeVersion !== '未安装' && chromeVersion !== '不可用',
+    updateSource: `${updater.GITHUB_OWNER}/${updater.GITHUB_REPO}`
+  });
+});
+
+// 检查更新接口
+app.get('/admin/api/check-update', async (req, res) => {
+  try {
+    const release = await updater.getLatestRelease();
+    const latestVersion = String(release.tag_name || '').replace(/^v/, '');
+    const currentVersion = updater.getCurrentVersion();
+
+    const sourceAsset = (release.assets || []).find((a) =>
+      a.name.startsWith('super-sniffer-source_')
+    );
+    const browserAssetReal = (release.assets || []).find((a) =>
+      a.name.startsWith('super-sniffer-browser_')
+    );
+
+    res.json({
+      code: 200,
+      currentVersion,
+      latestVersion,
+      sourceNeedUpdate: updater.compareVersions(latestVersion, currentVersion) > 0,
+      sourceAsset: sourceAsset
+        ? { name: sourceAsset.name, size: sourceAsset.size }
+        : null,
+      browserNeedUpdate: !!browserAssetReal,
+      browserAsset: browserAssetReal
+        ? { name: browserAssetReal.name, size: browserAssetReal.size }
+        : null,
+      releaseName: release.name,
+      releaseBody: release.body || ''
+    });
+  } catch (err) {
+    res.json({ code: 500, msg: '检查更新失败: ' + err.message });
+  }
+});
+
+// 执行更新接口（SSE 流式日志）
+app.post('/admin/api/update', async (req, res) => {
+  const type = (req.body && req.body.type) || 'all';
+  if (!['browser', 'source', 'all'].includes(type)) {
+    return res.status(400).json({ code: 400, msg: '无效的更新类型' });
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const send = (obj) => {
+    try {
+      res.write(JSON.stringify(obj) + '\n');
+    } catch (e) {
+      /* 连接已断开 */
+    }
+  };
+  const log = (msg, level = 'info') => send({ type: 'log', msg, level });
+
+  try {
+    if (type === 'browser') {
+      await updater.updateBrowser(log);
+      send({ type: 'done', ok: true, msg: '浏览器更新完成' });
+    } else if (type === 'source') {
+      await updater.updateSource(log);
+      send({ type: 'done', ok: true, msg: '源码更新完成，即将重启服务', restart: true });
+      setTimeout(() => updater.restartServer(log), 800);
+    } else {
+      // 一键升级：先浏览器，再源码
+      await updater.updateBrowser(log);
+      await updater.updateSource(log);
+      send({ type: 'done', ok: true, msg: '一键升级完成，即将重启服务', restart: true });
+      setTimeout(() => updater.restartServer(log), 800);
+    }
+  } catch (err) {
+    send({ type: 'log', msg: '更新失败: ' + err.message, level: 'err' });
+    send({ type: 'done', ok: false, msg: '更新失败: ' + err.message });
+  } finally {
+    setTimeout(() => {
+      try {
+        res.end();
+      } catch (e) {
+        /* 忽略 */
+      }
+    }, 300);
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`[超级嗅探] 解析服务已启动: http://localhost:${PORT}/node.js?url=`);
+  console.log(`[超级嗅探] 管理后台: http://localhost:${PORT}/admin`);
   console.log(`[超级嗅探] Chrome 路径: ${CHROME_PATH}`);
+  console.log(`[超级嗅探] 当前版本: v${updater.getCurrentVersion()}`);
 });

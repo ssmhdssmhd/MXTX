@@ -9,6 +9,7 @@
 - 四种提取方式：网络请求拦截、响应体扫描、页面内容扫描、iframe 扫描
 - 返回标准 JSON 格式，便于前端播放器直接对接
 - 支持带查询参数的 m3u8 地址（如 `index.m3u8?token=xxx`）
+- 内置管理后台，支持在线更新（浏览器更新 / 源码更新独立进行，一键升级）
 
 ## 系统要求
 
@@ -23,6 +24,8 @@
 ├── 1.sh             # 一键解压浏览器脚本
 ├── api.php          # PHP 前端接口（转发请求、提取 m3u8）
 ├── node.js          # Node.js 解析服务（Express + Puppeteer）
+├── update.js        # 在线更新模块（浏览器/源码独立更新）
+├── admin.html       # 管理后台页面
 ├── package.json     # Node.js 依赖配置
 ├── .user.ini        # PHP 运行配置
 ├── chrome-linux64/  # 解压后的 Chrome 浏览器（由 1.sh 生成）
@@ -84,6 +87,44 @@ PORT=8080 node node.js
 export PLAYER_HOST="http://127.0.0.1:1314"
 ```
 
+## 管理后台 & 在线更新
+
+启动服务后，浏览器访问 **`http://<服务器IP>:1314/admin`** 进入管理后台。
+
+### 后台功能
+
+- **服务状态**：实时显示服务运行状态、监听端口、Chrome 版本、当前版本
+- **浏览器更新**：仅更新 Chrome 浏览器，不影响源码与服务逻辑
+- **源码更新**：仅更新项目源码（`node.js`、`api.php`、`admin.html` 等），不影响浏览器
+- **一键升级**：先更新浏览器，再更新源码，全自动完成
+
+### 更新机制
+
+- 更新源为 GitHub Releases（`ssmhdssmhd/MXTX`），源码包与浏览器包独立发布
+- 浏览器更新与源码更新**互不干扰**，各自下载、解压、替换、验证
+- 更新前自动备份，更新后自动验证；验证失败自动回滚到旧版本
+- 源码更新完成后服务自动重启，无需手动操作
+
+### 更新接口
+
+```
+GET  /admin                  # 管理后台页面
+GET  /admin/api/status       # 服务状态
+GET  /admin/api/check-update # 检查更新（对比 GitHub 最新版本）
+POST /admin/api/update       # 执行更新（body: {"type":"browser"|"source"|"all"}）
+```
+
+### 更新源配置
+
+默认更新源为 `ssmhdssmhd/MXTX`，可通过环境变量修改：
+
+```bash
+export GITHUB_OWNER="你的用户名"
+export GITHUB_REPO="你的仓库名"
+# 私有仓库需要 Token
+export GITHUB_TOKEN="ghp_xxx"
+```
+
 ## API 接口
 
 ### 解析视频地址
@@ -129,6 +170,9 @@ GET /api.php?url=<视频页面地址>
 | PARSE_TIMEOUT | 30000 | 页面加载超时（毫秒） |
 | EXTRA_WAIT | 3000 | 加载完成后额外等待时间（毫秒） |
 | PLAYER_HOST | `http://122.51.166.115:1314` | PHP 前端指向的解析服务地址 |
+| GITHUB_OWNER | `ssmhdssmhd` | 在线更新的 GitHub 用户名 |
+| GITHUB_REPO | `MXTX` | 在线更新的 GitHub 仓库名 |
+| GITHUB_TOKEN | 空 | GitHub Token（私有仓库更新需要） |
 
 ## 常见问题
 

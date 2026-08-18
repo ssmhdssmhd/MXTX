@@ -5,6 +5,31 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.0] - 2026-08-18
+
+### 新增
+
+- 新增管理后台页面 `admin.html`
+  - 实时显示服务状态、监听端口、Chrome 版本、当前版本
+  - 浏览器更新与源码更新独立展示，互不干扰
+  - 支持一键升级（浏览器 + 源码）
+- 新增在线更新模块 `update.js`
+  - 浏览器更新：仅更新 Chrome 浏览器，不影响源码
+  - 源码更新：仅更新项目源码，不影响浏览器
+  - 更新前自动备份，更新后自动验证，验证失败自动回滚
+  - 源码更新完成后服务自动重启
+- `node.js` 新增后台管理接口
+  - `GET /admin` 管理后台页面
+  - `GET /admin/api/status` 服务状态
+  - `GET /admin/api/check-update` 检查更新
+  - `POST /admin/api/update` 执行更新（browser / source / all）
+- 更新源支持环境变量配置（`GITHUB_OWNER`、`GITHUB_REPO`、`GITHUB_TOKEN`）
+
+### 优化
+
+- 更新 `README.md`，补充管理后台与在线更新使用说明
+- 版本升级至 1.2.0
+
 ## [1.1.0] - 2026-08-18
 
 ### 新增

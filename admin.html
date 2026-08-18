@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>超级嗅探 - 管理后台</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --card-hover: #263449;
+    --border: #334155;
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+    --primary: #3b82f6;
+    --primary-hover: #2563eb;
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --radius: 12px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 24px;
+  }
+  .container { max-width: 960px; margin: 0 auto; }
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .header h1 {
+    font-size: 22px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .logo {
+    width: 36px; height: 36px;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+  }
+  .badge {
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .badge.online { color: var(--success); border-color: rgba(34,197,94,.4); }
+  .badge.offline { color: var(--danger); border-color: rgba(239,68,68,.4); }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    transition: background .2s;
+  }
+  .card:hover { background: var(--card-hover); }
+  .card-title {
+    font-size: 14px;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .card-title .icon { font-size: 16px; }
+  .version-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .version-label { font-size: 13px; color: var(--text-dim); }
+  .version-value { font-size: 18px; font-weight: 700; }
+  .version-value.new { color: var(--success); }
+  .version-value.old { color: var(--warning); }
+  .version-value.current { color: var(--text); }
+  .desc { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 18px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all .2s;
+    color: #fff;
+  }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-primary { background: var(--primary); }
+  .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+  .btn-success { background: var(--success); }
+  .btn-success:hover:not(:disabled) { background: #16a34a; }
+  .btn-outline {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  .btn-outline:hover:not(:disabled) { background: var(--card-hover); }
+  .btn-block { width: 100%; margin-top: 14px; }
+  .btn-lg { padding: 14px 20px; font-size: 15px; }
+
+  .status-bar {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .status-item {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 20px;
+    flex: 1;
+    min-width: 150px;
+  }
+  .status-item .label { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+  .status-item .value { font-size: 15px; font-weight: 600; }
+
+  .log-box {
+    margin-top: 16px;
+    background: #0b1220;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+    max-height: 280px;
+    overflow-y: auto;
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.8;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .log-box .log-time { color: var(--text-dim); }
+  .log-box .log-ok { color: var(--success); }
+  .log-box .log-err { color: var(--danger); }
+  .log-box .log-info { color: var(--text); }
+  .log-box .log-warn { color: var(--warning); }
+
+  .updating { pointer-events: none; opacity: .6; }
+  .spinner {
+    display: inline-block;
+    width: 14px; height: 14px;
+    border: 2px solid rgba(255,255,255,.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .footer {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 12px;
+    margin-top: 24px;
+  }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1><span class="logo">🔍</span> 超级嗅探 管理后台</h1>
+    <div>
+      <span class="badge" id="serviceBadge">检测中...</span>
+      <span class="badge" id="versionBadge">v-</span>
+    </div>
+  </div>
+
+  <!-- 服务状态 -->
+  <div class="status-bar">
+    <div class="status-item">
+      <div class="label">服务状态</div>
+      <div class="value" id="stService">-</div>
+    </div>
+    <div class="status-item">
+      <div class="label">监听端口</div>
+      <div class="value" id="stPort">-</div>
+    </div>
+    <div class="status-item">
+      <div class="label">Chrome 版本</div>
+      <div class="value" id="stChrome">-</div>
+    </div>
+    <div class="status-item">
+      <div class="label">当前版本</div>
+      <div class="value" id="stVersion">-</div>
+    </div>
+  </div>
+
+  <!-- 更新区域 -->
+  <div class="grid">
+    <!-- 浏览器更新 -->
+    <div class="card" id="browserCard">
+      <div class="card-title">
+        <span><span class="icon">🌐</span> 浏览器更新</span>
+        <span class="badge" id="browserUpdateBadge">-</span>
+      </div>
+      <div class="version-row">
+        <span class="version-label">当前版本</span>
+        <span class="version-value current" id="browserCurrent">-</span>
+      </div>
+      <div class="version-row">
+        <span class="version-label">最新版本</span>
+        <span class="version-value" id="browserLatest">-</span>
+      </div>
+      <div class="desc">仅更新 Chrome 浏览器，不影响源码与服务逻辑。</div>
+      <button class="btn btn-primary btn-block" id="btnBrowser" onclick="doUpdate('browser')">更新浏览器</button>
+    </div>
+
+    <!-- 源码更新 -->
+    <div class="card" id="sourceCard">
+      <div class="card-title">
+        <span><span class="icon">📦</span> 源码更新</span>
+        <span class="badge" id="sourceUpdateBadge">-</span>
+      </div>
+      <div class="version-row">
+        <span class="version-label">当前版本</span>
+        <span class="version-value current" id="sourceCurrent">-</span>
+      </div>
+      <div class="version-row">
+        <span class="version-label">最新版本</span>
+        <span class="version-value" id="sourceLatest">-</span>
+      </div>
+      <div class="desc">仅更新项目源码（node.js、api.php 等），不影响浏览器。</div>
+      <button class="btn btn-primary btn-block" id="btnSource" onclick="doUpdate('source')">更新源码</button>
+    </div>
+  </div>
+
+  <!-- 一键升级 -->
+  <button class="btn btn-success btn-block btn-lg" id="btnAll" onclick="doUpdate('all')">
+    ⚡ 一键升级（浏览器 + 源码）
+  </button>
+
+  <!-- 日志 -->
+  <div class="log-box" id="logBox"><span class="log-time">[系统]</span> 等待操作...</div>
+
+  <div class="footer">超级嗅探 v1.2.0 · 在线更新系统</div>
+</div>
+
+<script>
+// ========== 状态管理 ==========
+let updating = false;
+let latestRelease = null;
+
+function log(msg, level) {
+  const box = document.getElementById('logBox');
+  const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  const cls = level === 'ok' ? 'log-ok' : level === 'err' ? 'log-err' : level === 'warn' ? 'log-warn' : 'log-info';
+  const line = document.createElement('div');
+  line.innerHTML = `<span class="log-time">[${time}]</span> <span class="${cls}">${msg}</span>`;
+  box.appendChild(line);
+  box.scrollTop = box.scrollHeight;
+}
+
+function setBadge(el, text, cls) {
+  el.textContent = text;
+  el.className = 'badge' + (cls ? ' ' + cls : '');
+}
+
+function setButtons(disabled) {
+  updating = disabled;
+  ['btnBrowser', 'btnSource', 'btnAll'].forEach((id) => {
+    document.getElementById(id).disabled = disabled;
+  });
+  if (disabled) {
+    document.getElementById('browserCard').classList.add('updating');
+    document.getElementById('sourceCard').classList.add('updating');
+  } else {
+    document.getElementById('browserCard').classList.remove('updating');
+    document.getElementById('sourceCard').classList.remove('updating');
+  }
+}
+
+// ========== 加载状态 ==========
+async function loadStatus() {
+  try {
+    const res = await fetch('/admin/api/status');
+    const data = await res.json();
+    document.getElementById('stService').textContent = data.service;
+    document.getElementById('stPort').textContent = data.port;
+    document.getElementById('stChrome').textContent = data.chromeVersion;
+    document.getElementById('stVersion').textContent = 'v' + data.version;
+    document.getElementById('versionBadge').textContent = 'v' + data.version;
+    setBadge(document.getElementById('serviceBadge'), data.service === '运行中' ? '运行中' : '异常', data.service === '运行中' ? 'online' : 'offline');
+    document.getElementById('browserCurrent').textContent = data.chromeVersion;
+    document.getElementById('sourceCurrent').textContent = 'v' + data.version;
+  } catch (e) {
+    setBadge(document.getElementById('serviceBadge'), '离线', 'offline');
+    log('无法连接后台服务: ' + e.message, 'err');
+  }
+}
+
+// ========== 检查更新 ==========
+async function checkUpdate() {
+  try {
+    const res = await fetch('/admin/api/check-update');
+    const data = await res.json();
+    if (data.code !== 200) {
+      log('检查更新失败: ' + (data.msg || '未知错误'), 'warn');
+      return;
+    }
+    latestRelease = data;
+    const latestVer = data.latestVersion;
+
+    // 源码
+    document.getElementById('sourceLatest').textContent = 'v' + latestVer;
+    const srcNeed = data.sourceNeedUpdate;
+    setBadge(
+      document.getElementById('sourceUpdateBadge'),
+      srcNeed ? '有新版本' : '已是最新',
+      srcNeed ? 'online' : ''
+    );
+    document.getElementById('sourceLatest').className = 'version-value ' + (srcNeed ? 'new' : 'current');
+
+    // 浏览器
+    const chromeNow = document.getElementById('stChrome').textContent;
+    document.getElementById('browserLatest').textContent = data.browserAsset ? data.browserAsset.name : '无浏览器包';
+    const brNeed = data.browserNeedUpdate;
+    setBadge(
+      document.getElementById('browserUpdateBadge'),
+      brNeed ? '可更新' : '已是最新',
+      brNeed ? 'online' : ''
+    );
+    document.getElementById('browserLatest').className = 'version-value ' + (brNeed ? 'new' : 'current');
+
+    log(`检查完成：最新版本 v${latestVer}，源码${srcNeed ? '有更新' : '已最新'}，浏览器${brNeed ? '有更新' : '已最新'}`, 'ok');
+  } catch (e) {
+    log('检查更新失败: ' + e.message, 'err');
+  }
+}
+
+// ========== 执行更新 ==========
+async function doUpdate(type) {
+  if (updating) return;
+  setButtons(true);
+  log('========== 开始更新 ==========', 'info');
+
+  try {
+    const res = await fetch('/admin/api/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type })
+    });
+
+    // 流式读取日志
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      lines.forEach((line) => {
+        if (!line.trim()) return;
+        try {
+          const item = JSON.parse(line);
+          if (item.type === 'log') log(item.msg, item.level || 'info');
+          else if (item.type === 'done') {
+            log(item.msg, item.ok ? 'ok' : 'err');
+            if (item.restart) {
+              log('服务即将重启，页面将自动刷新...', 'warn');
+              setTimeout(() => location.reload(), 2500);
+            }
+          }
+        } catch (e) { /* 忽略非 JSON 行 */ }
+      });
+    }
+  } catch (e) {
+    log('更新请求失败: ' + e.message, 'err');
+  } finally {
+    setButtons(false);
+    // 刷新状态
+    setTimeout(() => { loadStatus(); checkUpdate(); }, 1500);
+  }
+}
+
+// ========== 初始化 ==========
+loadStatus();
+checkUpdate();
+setInterval(() => { if (!updating) loadStatus(); }, 30000);
+</script>
+</body>
+</html>
