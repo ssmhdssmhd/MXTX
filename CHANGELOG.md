@@ -5,6 +5,15 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.4.3] - 2026-08-19
+
+### /api.php 兼容路由（修复 Cannot GET /api.php）
+
+### Added
+- 🌐 新增 `/api.php` 兼容路由：与 `/node.js` 共用同一解析逻辑，支持 `http://IP:端口/api.php?url=<视频链接>` 调用方式
+  - 背景：项目附带的 `api.php` 是 PHP 文件，需在 PHP 环境（宝塔/Nginx+PHP）部署，Node 服务无法直接执行
+  - 修复：`/api.php` 与 `/node.js` 等价，`Cannot GET /api.php`（Express 404）不再出现
+
 ## [2.4.2] - 2026-08-19
 
 ### 源码更新改为 git 直接拉取 + 修复更新后服务自动关闭
