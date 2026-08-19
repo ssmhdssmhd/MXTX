@@ -2509,14 +2509,23 @@ app.post('/admin/api/update', adminAuth, async (req, res) => {
       await updater.updateBrowser(log, onProgress);
       send({ type: 'done', ok: true, msg: '浏览器更新完成' });
     } else if (type === 'source') {
-      await updater.updateSource(log, onProgress);
-      send({ type: 'done', ok: true, msg: '源码更新完成，即将重启服务', restart: true });
-      setTimeout(() => updater.restartServer(log), 800);
+      const ret = await updater.updateSource(log, onProgress);
+      // 已是最新版本（skipped）时不重启服务，避免无意义重启 / 页面误刷新
+      if (ret && ret.skipped) {
+        send({ type: 'done', ok: true, msg: `已是最新版本（v${updater.getCurrentVersion()}），无需更新` });
+      } else {
+        send({ type: 'done', ok: true, msg: '源码更新完成，即将重启服务', restart: true });
+        setTimeout(() => updater.restartServer(log), 800);
+      }
     } else {
       await updater.updateBrowser(log, onProgress);
-      await updater.updateSource(log, onProgress);
-      send({ type: 'done', ok: true, msg: '一键升级完成，即将重启服务', restart: true });
-      setTimeout(() => updater.restartServer(log), 800);
+      const ret = await updater.updateSource(log, onProgress);
+      if (ret && ret.skipped) {
+        send({ type: 'done', ok: true, msg: '浏览器更新完成（源码已是最新版本，无需更新）' });
+      } else {
+        send({ type: 'done', ok: true, msg: '一键升级完成，即将重启服务', restart: true });
+        setTimeout(() => updater.restartServer(log), 800);
+      }
     }
   } catch (err) {
     send({ type: 'log', msg: '更新失败: ' + err.message, level: 'err' });

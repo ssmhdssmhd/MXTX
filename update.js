@@ -99,6 +99,8 @@ if (MX_PROXY) {
 const ROOT_DIR = __dirname;
 const BACKUP_DIR = path.join(ROOT_DIR, 'backup');
 const TMP_DIR = path.join(os.tmpdir(), 'super-sniffer-update');
+// 确保下载/解压临时目录存在，否则 createWriteStream 会抛 ENOENT 导致进程崩溃
+fs.mkdirSync(TMP_DIR, { recursive: true });
 const CONFIG_FILE = path.join(ROOT_DIR, 'update-config.json');
 
 const SOURCE_BRANCH = {
@@ -195,7 +197,16 @@ async function githubApi(url) {
 
 async function getLatestRelease() {
   const branch = getBranch();
-  const releases = await githubApi(`${API_BASE}/releases?per_page=30`);
+  let releases;
+  try {
+    releases = await githubApi(`${API_BASE}/releases?per_page=30`);
+  } catch (e) {
+    // API 限流（403/429，匿名 60 次/小时，共享/NAT IP 极易耗尽）时，
+    // 回退到 GitHub Releases Atom Feed（不受 API 限流），仍可正常检查/更新
+    const viaFeed = await getLatestReleaseViaFeed();
+    if (viaFeed) return viaFeed;
+    throw e;
+  }
   const filtered = releases.filter((r) => {
     const tag = String(r.tag_name || '');
     if (branch === 'cs1') return tag.includes('-cs1');
@@ -205,6 +216,53 @@ async function getLatestRelease() {
     throw new Error(`${branch} 分支暂无发布版本`);
   }
   return filtered[0];
+}
+
+// 按资产命名约定构造资产对象（feed 不含资产列表，但项目资产名固定可推导）
+function buildAsset(type, tag, version, suffix) {
+  const prefix = type === 'browser' ? 'super-sniffer-browser_' : 'super-sniffer-source_';
+  const name = `${prefix}${version}${suffix}.zip`;
+  return {
+    name,
+    size: 0,
+    browser_download_url: `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/${tag}/${name}`
+  };
+}
+
+// 回退：GitHub API 限流时，从 releases.atom 源解析最新发布标签
+async function getLatestReleaseViaFeed() {
+  const branch = getBranch();
+  const suffix = BRANCH_SUFFIX[branch];
+  const res = await fetch(
+    `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases.atom`,
+    { headers: { 'User-Agent': 'super-sniffer-updater' }, dispatcher }
+  );
+  if (!res.ok) throw new Error(`GitHub Releases 源访问失败 (HTTP ${res.status})`);
+  const xml = await res.text();
+  const entries = xml.match(/<entry>[\s\S]*?<\/entry>/g) || [];
+  for (const entry of entries) {
+    const idMatch = entry.match(/<id>tag:[^<]*\/([^\/<]+)<\/id>/);
+    const linkMatch = entry.match(/href="[^"]*\/releases\/tag\/([^"\/]+)"/);
+    const titleMatch = entry.match(/<title>([^<]*)<\/title>/);
+    const tag = (idMatch && idMatch[1]) || (linkMatch && linkMatch[1]);
+    if (!tag) continue;
+    if (suffix) {
+      if (!tag.includes(suffix)) continue;
+    } else if (tag.includes('-cs1')) {
+      continue;
+    }
+    const version = String(tag).replace(/^v/i, '');
+    const baseVersion = version.split('-')[0]; // 剥离 -cs1 分支后缀，资产名用基础版本
+    return {
+      tag_name: tag,
+      name: titleMatch ? titleMatch[1] : tag,
+      assets: [
+        buildAsset('source', tag, baseVersion, suffix),
+        buildAsset('browser', tag, baseVersion, suffix)
+      ]
+    };
+  }
+  throw new Error(`${branch} 分支暂无发布版本`);
 }
 
 function findAsset(release, type) {
@@ -231,8 +289,14 @@ async function downloadOnce(url, dest, headers, onProgress) {
   let received = 0;
   let lastEmit = 0;
 
+  // 确保下载目录存在（防御性，配合模块加载时创建 TMP_DIR）
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
   const fileStream = fs.createWriteStream(dest);
   const reader = res.body.getReader();
+
+  // 捕获写盘错误（磁盘满/权限/目录不可写），转成 Promise 拒绝而不是进程崩溃
+  let streamErr = null;
+  fileStream.on('error', (err) => { streamErr = err; });
 
   const emit = (force) => {
     if (typeof onProgress !== 'function') return;
@@ -251,14 +315,20 @@ async function downloadOnce(url, dest, headers, onProgress) {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (streamErr) throw streamErr;
       received += value.length;
-      fileStream.write(Buffer.from(value));
+      // 写回退压：write 返回 false 时等待 drain，避免大文件（如 127MB 浏览器包）内存暴涨
+      if (!fileStream.write(Buffer.from(value))) {
+        await new Promise((resolve) => fileStream.once('drain', resolve));
+      }
       emit(false);
     }
   } finally {
     fileStream.end();
     await reader.cancel().catch(() => {});
   }
+
+  if (streamErr) throw streamErr;
 
   // 完整性校验：Content-Length 存在但字节数对不上 -> 视为下载失败（大文件半途截断）
   if (contentLength > 0 && received !== contentLength) {
@@ -292,7 +362,16 @@ async function downloadFile(url, dest, onProgress) {
 
 function extractZip(zipPath, destDir) {
   fs.mkdirSync(destDir, { recursive: true });
-  execSync(`unzip -o "${zipPath}" -d "${destDir}"`, { stdio: 'pipe' });
+  try {
+    execSync(`unzip -o "${zipPath}" -d "${destDir}"`, { stdio: 'pipe' });
+  } catch (e) {
+    // unzip 缺失（精简 Docker / 部分宝塔环境）时回退到 python3 内置 zipfile 解压
+    try {
+      execSync(`python3 -m zipfile -e "${zipPath}" "${destDir}"`, { stdio: 'pipe' });
+    } catch (e2) {
+      throw new Error('解压失败：缺少 unzip，且 python3 解压也失败');
+    }
+  }
 }
 
 function rmrf(p) {
