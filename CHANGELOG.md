@@ -5,6 +5,23 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.4.7] - 2026-08-19
+
+### 修复未编码 & 导致腾讯视频链接解析不到（404）
+
+### Fixed
+- 🐛 修复 `url` 参数未做 URL 编码时，目标视频 URL 里的 `&` 被 Express 拆成独立参数，导致关键参数丢失
+  - 根因：客户端直接调用 `/node.js?url=https://m.v.qq.com/x/m/play?cid=xxx&vid=yyy`（未编码）时，`&vid=yyy` 会被解析成顶层 `vid` 参数，解析器拿到的 URL 只有 `cid` 没有 `vid`，腾讯官方解析因缺 vid 直接放弃 → 404 未找到播放链接
+  - 修复：新增 `resolveVideoUrl(req)`，把散落的、不属于服务自身参数（`url/detailed/refresh/providers`）的 query 参数自动合并回 url 查询串，恢复完整视频地址（腾讯 cid&vid、搜狐、爱奇艺等带 `&` 的平台链接同样受益）
+  - 覆盖路由：`/node.js`、`/api.php`、`/sniff`、`/admin/api/sniff-stream`
+- 🐛 修复腾讯视频 URL 只有 `cid` 没有 `vid` 时官方解析放弃
+  - 修复：`qqVideoResolve` 缺 vid 时新增 `qqExtractVidFromPage`，抓取 m.v.qq.com 页面从 HTML 提取 vid 后再走 getinfo 官方接口
+
+### 验证
+- 用户原始未编码 URL（此前 404）→ **code 200 命中 mp4 直链**
+- 只有 cid（无 vid）→ **code 200**（页面提取 vid 兜底生效）
+- 已编码完整 URL / B站 / `/sniff` / `/api.php` 兼容路由 → 全部 200，成功链路不受影响
+
 ## [2.4.6] - 2026-08-19
 
 ### 配置收敛到 .env：node.js / api.php 自动跟随实际运行端口（更新后无需再手动改）

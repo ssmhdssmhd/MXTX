@@ -1,7 +1,7 @@
 /**
- * 超级嗅探 - Node.js 视频解析服务 v2.4.6
+ * 超级嗅探 - Node.js 视频解析服务 v2.4.7
  *
- * 版本：v2.4.6
+ * 版本：v2.4.7
  *
  * 功能概述：
  *   1. 核心解析接口 /node.js：使用 Puppeteer 无头浏览器打开目标视频页面，
@@ -305,6 +305,38 @@ function isVideoUrl(url) {
   } catch (e) {
     return false;
   }
+}
+
+// 服务自身查询参数名：这些参数是给解析服务用的，不属于目标视频 URL 的查询参数。
+// /node.js 与 /sniff 实际消费的参数：url / detailed / refresh / providers。
+const SERVICE_QUERY_KEYS = new Set(['url', 'detailed', 'refresh', 'providers']);
+
+/**
+ * 解析目标视频 URL（v2.4.6 新增参数合并容错）
+ *
+ * 背景：客户端若未对 url 参数做 URL 编码（如
+ *   /node.js?url=https://m.v.qq.com/x/m/play?cid=xxx&vid=yyy
+ * 未编码时 `&vid=yyy` 会被 Express 拆成独立顶层参数，解析器拿到的 URL 丢失 vid 导致 404）。
+ *
+ * 这里把散落的、不属于服务自身参数的 query 参数合并回 url 的查询串，
+ * 恢复完整的视频地址（腾讯 cid&vid、搜狐、爱奇艺等带 & 的平台链接同样受益）。
+ */
+function resolveVideoUrl(req) {
+  let url = (req.query.url || '').trim();
+  if (!url || !url.includes('?')) return url;
+  const merge = [];
+  for (const [k, v] of Object.entries(req.query)) {
+    if (SERVICE_QUERY_KEYS.has(k)) continue;
+    if (v === undefined || v === null) continue;
+    // 值本身是完整 URL（再次内嵌 url=xxx 之类）跳过，避免污染
+    if (/^https?:\/\//i.test(String(v))) continue;
+    merge.push(encodeURIComponent(k) + '=' + encodeURIComponent(String(v)));
+  }
+  if (!merge.length) return url;
+  // 已存在于 url 查询串的参数不再重复合并
+  const existing = new Set((url.split('?')[1] || '').split('&').map((p) => p.split('=')[0]));
+  const add = merge.filter((pair) => !existing.has(pair.split('=')[0]));
+  return add.length ? url + '&' + add.join('&') : url;
 }
 
 function extractFromText(text) {
@@ -1477,7 +1509,12 @@ async function qqVideoResolve(videoUrl) {
     const host = String(videoUrl || '').match(/^https?:\/\/([^/]+)/i);
     if (!host || !QQ_HOST_RE.test(host[1])) return null;
     const m = String(videoUrl).match(/[?&]vid=([0-9a-zA-Z]+)/i);
-    const vid = m ? m[1] : '';
+    let vid = m ? m[1] : '';
+    // v2.4.6：URL 只有 cid 没有 vid（如 m.v.qq.com/x/m/play?cid=xxx）时，
+    // 抓取页面从 HTML 里提取 vid，保证这类链接也能命中官方解析
+    if (!vid) {
+      vid = await qqExtractVidFromPage(videoUrl);
+    }
     if (!vid) return null;
 
     const api =
@@ -1510,6 +1547,30 @@ async function qqVideoResolve(videoUrl) {
   } catch (e) {
     if (MX_DEBUG) console.log(`[腾讯解析] ${videoUrl} 失败: ${e.message}`);
     return null;
+  }
+}
+
+/**
+ * 从腾讯视频页面 HTML 提取 vid（v2.4.6 新增）
+ * 用于 URL 只有 cid 没有 vid 的场景，避免官方解析因缺 vid 直接放弃。
+ */
+async function qqExtractVidFromPage(pageUrl) {
+  try {
+    const res = await undiciFetch(pageUrl, {
+      dispatcher: universalDispatcher,
+      headers: { 'User-Agent': MX_USER_AGENT, Referer: 'https://m.v.qq.com/' },
+      signal: AbortSignal.timeout(15000)
+    });
+    if (!res.ok) return '';
+    const text = await res.text();
+    // 常见内嵌形式：vid:"xxx" / vid='xxx' / vid=xxx / "video_id":"xxx"
+    let m = text.match(/["']?vid["']?\s*[:=]\s*["']([0-9a-zA-Z]+)["']/i);
+    if (m) return m[1];
+    m = text.match(/[?&]vid=([0-9a-zA-Z]+)/);
+    if (m) return m[1];
+    return '';
+  } catch (e) {
+    return '';
   }
 }
 
@@ -1728,7 +1789,7 @@ app.use((req, res, next) => {
 // 不能由 Node 直接执行。为兼容 `http://IP:端口/api.php?url=` 的调用习惯，
 // 这里将 /api.php 与 /node.js 共用同一解析逻辑（等价接口）。
 const nodeJsParseHandler = async (req, res) => {
-  const videoUrl = (req.query.url || '').trim();
+  const videoUrl = resolveVideoUrl(req);
 
   if (!videoUrl) {
     return res.json({ code: 400, msg: '请提供需要解析的链接' });
@@ -1771,7 +1832,7 @@ app.get('/api.php', nodeJsParseHandler);
 // 11. /sniff 万能嗅探对外接口
 // ============================================================
 app.get('/sniff', async (req, res) => {
-  const videoUrl = (req.query.url || '').trim();
+  const videoUrl = resolveVideoUrl(req);
   const detailed = req.query.detailed != null ? (req.query.detailed === '1' || req.query.detailed === 'true') : MX_UNIVERSAL_DETAILED;
   const refresh = req.query.refresh === '1' || req.query.refresh === 'true'; // 跳过缓存强制重新嗅探
 
@@ -2464,7 +2525,7 @@ app.get('/admin/api/providers', adminAuth, (req, res) => {
 // 16. /admin/api/sniff-stream SSE
 // ============================================================
 app.get('/admin/api/sniff-stream', adminAuth, async (req, res) => {
-  const videoUrl = (req.query.url || '').trim();
+  const videoUrl = resolveVideoUrl(req);
   if (!videoUrl) {
     return res.status(400).json({ type: 'error', msg: '请提供视频地址' });
   }
