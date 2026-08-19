@@ -380,6 +380,43 @@ function rmrf(p) {
   }
 }
 
+// ========== Git 源码更新辅助 ==========
+
+// 当前目录是否为 git 仓库（决定源码更新走 git 拉取还是 zip 下载）
+function isGitRepo() {
+  return fs.existsSync(path.join(ROOT_DIR, '.git'));
+}
+
+function execGit(args, timeout = 120000) {
+  return execSync(`git ${args}`, {
+    cwd: ROOT_DIR,
+    stdio: 'pipe',
+    timeout
+  }).toString().trim();
+}
+
+// 当前进程的父进程 PID（用于判断是否由 systemd 托管）
+function getPpid() {
+  try {
+    const stat = fs.readFileSync('/proc/self/stat', 'utf8').toString().split(' ');
+    return parseInt(stat[3], 10) || 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+// 是否由 systemd 直接托管（父进程为 systemd，即 systemd service Type=simple）
+function isSystemdManaged() {
+  try {
+    const ppid = getPpid();
+    if (ppid <= 0) return false;
+    const pcomm = fs.readFileSync(`/proc/${ppid}/comm`, 'utf8').trim();
+    return pcomm === 'systemd';
+  } catch (e) {
+    return false;
+  }
+}
+
 function findDir(dir, name) {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const e of entries) {
@@ -482,8 +519,99 @@ async function updateBrowser(log, onProgress) {
 
 // ========== 源码更新 ==========
 
+// 源码更新入口：目录为 git 仓库时直接用 git 拉取 GitHub 对应分支代码；
+// 非 git 仓库（如 zip 解压部署）时回退到 Release 源码包下载。
 async function updateSource(log, onProgress) {
-  log('开始源码更新...');
+  if (isGitRepo()) {
+    return await updateSourceViaGit(log, onProgress);
+  }
+  return await updateSourceViaZip(log, onProgress);
+}
+
+// git 方式：直接拉取 GitHub <branch> 分支最新代码（不改动其他分支）
+async function updateSourceViaGit(log, onProgress) {
+  log('开始源码更新（git 拉取 GitHub 代码）...');
+  const branch = getBranch();
+
+  // 1. 拉取远端目标分支
+  log(`git fetch origin ${branch} ...`);
+  try {
+    execGit(`fetch origin ${branch}`, 180000);
+  } catch (e) {
+    throw new Error(`git fetch 失败: ${e.message.split('\n')[0]}`);
+  }
+
+  // 2. 读取远端版本（package.json）做递增保护
+  let remoteVersion = '0.0.0';
+  try {
+    const remotePkg = execGit(`show origin/${branch}:package.json`, 30000);
+    remoteVersion = JSON.parse(remotePkg).version || '0.0.0';
+  } catch (e) {
+    log('警告: 无法读取远端版本，跳过版本比较');
+  }
+  const currentVersion = getCurrentVersion();
+  if (compareVersions(remoteVersion, currentVersion) <= 0) {
+    log(`已是最新版本（v${currentVersion}），无需更新`);
+    return { type: 'source', version: remoteVersion, skipped: true };
+  }
+  log(`发现新版本 v${remoteVersion}（当前 v${currentVersion}）`);
+
+  // 3. 备份当前源码（git 操作前备份，拉取失败可回滚）
+  const backupSourceDir = path.join(BACKUP_DIR, 'source');
+  rmrf(backupSourceDir);
+  fs.mkdirSync(backupSourceDir, { recursive: true });
+  for (const file of SOURCE_FILES) {
+    const src = path.join(ROOT_DIR, file);
+    if (fs.existsSync(src)) {
+      fs.cpSync(src, path.join(backupSourceDir, file), { recursive: true });
+    }
+  }
+  log('已备份当前源码');
+
+  // 4. 确保本地在目标分支并强制同步远端（只影响该分支，不动 main）
+  try {
+    const currentBranch = execGit('rev-parse --abbrev-ref HEAD', 15000);
+    if (currentBranch !== branch) {
+      log(`切换本地分支 ${currentBranch} -> ${branch} ...`);
+      execGit(`checkout ${branch}`, 60000);
+    }
+    log(`git reset --hard origin/${branch} 同步最新代码...`);
+    execGit(`reset --hard origin/${branch}`, 60000);
+  } catch (e) {
+    // 拉取失败：用备份恢复，避免半更新状态
+    for (const file of SOURCE_FILES) {
+      const backup = path.join(backupSourceDir, file);
+      if (fs.existsSync(backup)) {
+        fs.cpSync(backup, path.join(ROOT_DIR, file), { recursive: true });
+      }
+    }
+    log('git 拉取失败，已恢复备份');
+    throw new Error('git 拉取失败: ' + e.message.split('\n')[0]);
+  }
+
+  // 5. 语法验证，失败回滚
+  try {
+    execSync(`node --check "${path.join(ROOT_DIR, 'node.js')}"`, { stdio: 'pipe' });
+    log('新源码语法验证通过');
+  } catch (e) {
+    for (const file of SOURCE_FILES) {
+      const backup = path.join(backupSourceDir, file);
+      if (fs.existsSync(backup)) {
+        fs.cpSync(backup, path.join(ROOT_DIR, file), { recursive: true });
+      }
+    }
+    log('新源码验证失败，已自动回滚到旧版本');
+    throw new Error('新源码验证失败，已自动回滚');
+  }
+
+  rmrf(backupSourceDir);
+  log(`源码更新完成，新版本: ${remoteVersion}`);
+  return { type: 'source', version: remoteVersion };
+}
+
+// zip 方式（非 git 仓库回退）：从 Release 下载源码包解压替换
+async function updateSourceViaZip(log, onProgress) {
+  log('开始源码更新（下载源码包）...');
   const release = await getLatestRelease();
   const version = String(release.tag_name || '').replace(/^v/, '');
   const asset = findAsset(release, 'source');
@@ -564,6 +692,21 @@ async function updateSource(log, onProgress) {
 
 function restartServer(log) {
   log('正在重启服务...');
+
+  // 1. systemd 托管（父进程为 systemd）：直接退出，由 Restart=always 自动拉起，避免重复 spawn 抢端口
+  if (isSystemdManaged()) {
+    log('检测到 systemd 托管，退出后由 systemd 自动重启...');
+    setTimeout(() => process.exit(0), 500);
+    return;
+  }
+  // 2. PM2 托管（autorestart）：直接退出，由 PM2 自动重启
+  if (process.env.PM_ID !== undefined || process.env.NODE_APP_INSTANCE !== undefined) {
+    log('检测到 PM2 托管，退出后由 PM2 自动重启...');
+    setTimeout(() => process.exit(0), 500);
+    return;
+  }
+  // 3. 裸跑（前台/脚本/nohup 无守护）：spawn detached 新进程接管，再退出当前进程
+  log('未检测到守护进程，spawn 新进程接管服务...');
   const mainFile = path.join(ROOT_DIR, 'node.js');
   const logFile = path.join(ROOT_DIR, 'restart.log');
   const out = fs.openSync(logFile, 'a');
@@ -604,5 +747,8 @@ module.exports = {
   compareVersions,
   updateBrowser,
   updateSource,
+  updateSourceViaGit,
+  updateSourceViaZip,
+  isGitRepo,
   restartServer
 };

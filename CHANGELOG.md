@@ -7,14 +7,15 @@
 
 ## [2.4.2] - 2026-08-19
 
-### 在线更新健壮性加固（修复点击更新报错 / 已是最新仍重启）
-
-### Fixed
-- 🐛 修复已是最新版本时点击「更新源码」仍会重启服务的问题：`/admin/api/update` 路由根据 `updateSource` 返回的 `skipped` 标记判断，已是最新时不再触发 `restartServer`，提示消息改为「已是最新版本，无需更新」，避免无意义重启与页面误刷新
-- 🐛 修复已发布源码包内 `update.js` 为旧版、缺少全部在线更新修复（GitHub API 限流 Atom Feed 兜底、python3 解压兜底、TMP_DIR 预创建、写盘错误捕获），导致点更新仍报错的问题——重新打包 `super-sniffer-source_2.4.2-cs1.zip` 并发布 v2.4.2-cs1 Release，确保下载到的包内 `update.js` 包含完整修复
+### 源码更新改为 git 直接拉取 + 修复更新后服务自动关闭
 
 ### Changed
-- 🔧 `update.js` 解压兼容性：`unzip` 命令缺失（精简 Docker / 部分宝塔环境）时回退 `python3 -m zipfile` 解压，提高环境适应性
+- 🔀 源码更新方式改为 **git 直接拉取 GitHub 对应分支代码**（目录为 git 仓库时）：`git fetch origin <branch>` → 读取远端 `package.json` 做版本递增保护 → `git reset --hard origin/<branch>` 同步最新代码，只影响所选分支（cs1 / main），不再依赖 Release 源码包下载解压
+- 📦 非 git 仓库（zip 解压部署）时回退到 Release 源码包下载解压，两种部署方式均可更新
+
+### Fixed
+- 🐛 修复更新完成后服务自动关闭的问题：`restartServer` 检测运行方式——systemd 托管直接退出由 `Restart=always` 拉起、PM2 托管由 `autorestart` 拉起、裸跑（前台/nohup）才 spawn detached 新进程接管，避免守护进程 + 新进程抢端口冲突导致服务关停
+- 🐛 修复已是最新版本时点击「更新源码」仍会重启服务的问题：`/admin/api/update` 路由根据 `updateSource` 返回的 `skipped` 标记判断，已是最新时不再触发重启，提示「已是最新版本，无需更新」
 
 ## [2.4.1] - 2026-08-19
 
