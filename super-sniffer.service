@@ -1,0 +1,77 @@
+# super-sniffer.service —— Systemd 单元（复制到 /etc/systemd/system/super-sniffer.service）
+#
+# 1) 复制并启用：
+#   sudo cp super-sniffer.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now super-sniffer
+# 2) 查看日志：
+#   journalctl -u super-sniffer -f
+#
+# 修改下面的 User / WorkingDirectory / EnvironmentFile 按你的实际路径。
+
+[Unit]
+Description=Super Sniffer v2.2 - M3U8 Video Parser with Universal Sniffing / Browser Pool v2 / Page Pool / Health Probes
+Documentation=https://github.com/ssmhdssmhd/MXTX
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ====== 修改为运行该服务的用户（建议非 root）======
+User=root
+Group=root
+
+# ====== 工作目录（项目根目录）======
+WorkingDirectory=/workspace
+
+# ====== 环境变量（若用 .env 文件推荐 EnvironmentFile 指令）======
+# EnvironmentFile=/workspace/.env
+Environment=NODE_ENV=production
+Environment=MX_PORT=1314
+Environment=MX_HOST=0.0.0.0
+Environment=MX_PLAYER_HOST=http://127.0.0.1:1314
+Environment=MX_ADMIN_USER=admin
+Environment=MX_ADMIN_PASS=admin888
+Environment=MX_ADMIN_AUTH=true
+Environment=MX_BROWSER_ENABLE=true
+Environment=MX_CHROME_PATH=/workspace/chrome-linux64/chrome
+Environment=MX_BROWSER_POOL_SIZE=2
+Environment=MX_BROWSER_WARMUP=true
+Environment=MX_BROWSER_MAX_MEM_MB=1200
+Environment=MX_BROWSER_HEALTH_INTERVAL=15
+Environment=MX_PAGE_POOL_SIZE=5
+Environment=MX_PAGE_MAX_USE=50
+Environment=MX_PAGE_IDLE_TIMEOUT=600
+Environment=MX_UNIVERSAL_ENABLE=true
+Environment=MX_UNIVERSAL_CONCURRENCY=6
+Environment=MX_UNIVERSAL_EARLY_HITS=3
+Environment=MX_UNIVERSAL_CIRCUIT_BREAK=3
+Environment=MX_UNIVERSAL_CB_COOLDOWN=30
+Environment=MX_UNIVERSAL_PER_PROVIDER_CONC=2
+Environment=MX_UNIVERSAL_TOPK_FIRST=10
+Environment=MX_CACHE_PERSIST=true
+Environment=MX_CACHE_DIR=/workspace/.mx_cache
+Environment=MX_CACHE_FLUSH_INTERVAL=60
+Environment=MX_UPDATE_SOURCE=stable
+
+# ====== 启动 ======
+ExecStart=/usr/bin/env node /workspace/node.js
+Restart=always
+RestartSec=5
+
+# ====== 资源 / 安全（推荐非 root 时开启）======
+# NoNewPrivileges=true
+# PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/workspace /tmp
+MemoryMax=3G
+
+# ====== 健康探针（systemd v252+，自带重启）======
+HealthCheckProbe=0
+HealthCheckStartInterval=10s
+HealthStartLimitBurst=3
+# 用 curl 访问 /healthz/ready 作为探针（注释掉上面的 HealthCheckProbe=0 启用）
+# ExecHealthCheck=/usr/bin/curl -fsS http://127.0.0.1:1314/healthz/ready || exit 1
+
+[Install]
+WantedBy=multi-user.target
