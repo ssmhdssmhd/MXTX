@@ -149,7 +149,10 @@ const MX_CACHE_FLUSH_INTERVAL = envInt('MX_CACHE_FLUSH_INTERVAL', 60); // 秒，
 const MX_PARSE_CONCURRENCY = envInt('MX_PARSE_CONCURRENCY', 5);
 const MX_UNIVERSAL_CONCURRENCY = envInt('MX_UNIVERSAL_CONCURRENCY', 6);
 const MX_SNIFF_ONE_TIMEOUT = envInt('MX_SNIFF_ONE_TIMEOUT', 15000);
-const MX_UNIVERSAL_EARLY_HITS = envInt('MX_UNIVERSAL_EARLY_HITS', 3);
+// 提前命中数：达到 N 家 Provider 命中后停止调度剩余 Provider（提速）。
+// v2.4.8 起默认 0 = 不使用提前命中，全部 Provider 都会执行（避免部分接口从未被使用）。
+// 需要加速时可设置 MX_UNIVERSAL_EARLY_HITS=3 恢复「命中 N 家即提前返回」。
+const MX_UNIVERSAL_EARLY_HITS = envInt('MX_UNIVERSAL_EARLY_HITS', 0);
 
 // --- 出站代理（v2.2 新增）---
 // 沙箱/部分服务器出站必须走 HTTP 代理才能访问外网第三方解析接口。
@@ -2175,7 +2178,7 @@ video { width: 100%; max-height: 500px; background: #000; display: block; }
 <body>
 <div class="header">
   <h1>🔍 万能嗅探测试 v2.2</h1>
-  <p>并发 ${MX_UNIVERSAL_CONCURRENCY} · 提前命中 ${MX_UNIVERSAL_EARLY_HITS} · ${PROVIDERS.length} 个 Provider</p>
+  <p>并发 ${MX_UNIVERSAL_CONCURRENCY} · 提前命中 ${MX_UNIVERSAL_EARLY_HITS > 0 ? MX_UNIVERSAL_EARLY_HITS : '全部'} · ${PROVIDERS.length} 个 Provider</p>
 </div>
 <div class="container">
   <div class="nav">
@@ -2343,7 +2346,7 @@ function startSniff() {
   document.getElementById('startBtn').disabled = true;
   document.getElementById('stopBtn').disabled = false;
   log('开始嗅探: ' + url, 'info');
-  log('Provider 数量: ${PROVIDERS.length} · 并发: ${MX_UNIVERSAL_CONCURRENCY} · 提前命中: ${MX_UNIVERSAL_EARLY_HITS}', 'info');
+  log('Provider 数量: ${PROVIDERS.length} · 并发: ${MX_UNIVERSAL_CONCURRENCY} · 提前命中: ${MX_UNIVERSAL_EARLY_HITS > 0 ? MX_UNIVERSAL_EARLY_HITS : '全部'}', 'info');
 
   const urlParams = new URLSearchParams();
   urlParams.set('url', url);
@@ -2742,7 +2745,7 @@ function listenWithRetry(port, retries) {
     console.log(`║  对外接口:     http://localhost:${port}/sniff?url=             ║`);
     console.log(`║  Provider 数: ${String(PROVIDERS.length).padEnd(36)}║`);
     console.log(`║  并发数:       ${String(MX_UNIVERSAL_CONCURRENCY).padEnd(36)}║`);
-    console.log(`║  提前命中:     ${String(MX_UNIVERSAL_EARLY_HITS).padEnd(36)}║`);
+    console.log(`║  提前命中:     ${String(MX_UNIVERSAL_EARLY_HITS > 0 ? MX_UNIVERSAL_EARLY_HITS : '全部(不使用提前命中)').padEnd(36)}║`);
     console.log(`║  结果缓存:     ${String(MX_UNIVERSAL_CACHE_MAX + '条/' + MX_UNIVERSAL_CACHE_TTL + 's').padEnd(36)}║`);
     console.log('╠══════════════════════════════════════════════════════════════╣');
     const _ps = browserPoolStats();

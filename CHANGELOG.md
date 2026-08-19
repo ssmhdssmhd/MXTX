@@ -5,6 +5,19 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.4.8] - 2026-08-19
+
+### Provider 全部执行（不再提前 skip 部分解析接口）
+
+### Changed
+- 🔧 万能嗅探「提前命中」默认关闭：`MX_UNIVERSAL_EARLY_HITS` 默认由 3 改为 **0**（0 = 不使用提前命中）
+  - 背景：默认 `MX_UNIVERSAL_EARLY_HITS=3` 时，任意 3 家 Provider 命中后，剩余 Provider 全部标记 skip 不再执行 → 「Provider 没有全部使用到」
+  - 修复：默认 0 时全部 Provider 都会执行，18 家解析接口完整跑一遍，结果更全、可用性更高；需要提速时可在 `.env` 设 `MX_UNIVERSAL_EARLY_HITS=3` 恢复「命中 3 家即提前返回」
+- 🎨 管理后台/万能嗅探页/启动横幅把提前命中显示为「全部（不使用提前命中）」当值为 0 时
+
+### Fixed
+- ✅ 解决「Provider 中的，没有全部使用到」：默认情况下每个 Provider 都会被实际调用（仍受熔断保护，连续失败 3 次的接口临时跳过）
+
 ## [2.4.7] - 2026-08-19
 
 ### 修复未编码 & 导致腾讯视频链接解析不到（404）
