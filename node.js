@@ -1366,6 +1366,55 @@ async function acquirePageWrapper() {
 }
 
 // ============================================================
+// 7.5 腾讯视频专用解析（vv.video.qq.com/getinfo）
+// 腾讯视频防盗链严格，页面/第三方解析站通常拿不到直接可播地址。
+// 这里直接从 URL 提取 vid，调用腾讯官方 getinfo 接口获取带 vkey 的播放地址。
+// 接口返回 QZOutputJson={...} 形式，播放地址 = ui.url + fn + '?vkey=' + fvkey
+// ============================================================
+const QQ_HOST_RE = /(^|\.)qq\.com$/i;
+
+async function qqVideoResolve(videoUrl) {
+  try {
+    const host = String(videoUrl || '').match(/^https?:\/\/([^/]+)/i);
+    if (!host || !QQ_HOST_RE.test(host[1])) return null;
+    const m = String(videoUrl).match(/[?&]vid=([0-9a-zA-Z]+)/i);
+    const vid = m ? m[1] : '';
+    if (!vid) return null;
+
+    const api =
+      'https://vv.video.qq.com/getinfo?vid=' + encodeURIComponent(vid) +
+      '&platform=11001&charge=0&otype=json';
+    const res = await undiciFetch(api, {
+      dispatcher: universalDispatcher,
+      headers: { 'User-Agent': MX_USER_AGENT, Referer: 'https://m.v.qq.com/' },
+      signal: AbortSignal.timeout(15000)
+    });
+    if (!res.ok) return null;
+    const text = await res.text();
+    let json;
+    try {
+      json = JSON.parse(String(text).replace(/^QZOutputJson\s*=\s*/, '').replace(/;\s*$/, ''));
+    } catch (e) { return null; }
+
+    if (!json || json.em !== 0 || !json.vl || !json.vl.vi || !json.vl.vi.length) return null;
+    const vi = json.vl.vi[0];
+    if (!vi || !vi.fn || !vi.fvkey || !vi.ul || !vi.ul.ui) return null;
+
+    const fmt = (json.fl && json.fl.fi && json.fl.fi[0] && json.fl.fi[0].formatdefn) || 'hd';
+    const out = [];
+    for (const u of vi.ul.ui) {
+      if (!u || !u.url) continue;
+      const full = u.url + vi.fn + '?vkey=' + vi.fvkey + '&platform=11001&fmt=' + fmt;
+      if (isValidUrl(full) && isVideoUrl(full)) out.push(full);
+    }
+    return out.length ? [...new Set(out)] : null;
+  } catch (e) {
+    if (MX_DEBUG) console.log(`[腾讯解析] ${videoUrl} 失败: ${e.message}`);
+    return null;
+  }
+}
+
+// ============================================================
 // 8. 核心 sniffVideoUrl 函数
 // ============================================================
 async function sniffVideoUrl(videoUrl) {
@@ -1478,6 +1527,13 @@ app.get('/node.js', async (req, res) => {
   }
 
   try {
+    // 腾讯视频专用解析：从 URL 提取 vid 调官方 getinfo 接口，命中则直接返回
+    const qqUrls = await qqVideoResolve(videoUrl);
+    if (qqUrls && qqUrls.length > 0) {
+      const qqResult = { code: 200, url: qqUrls[0], allUrls: qqUrls };
+      resultCache.set(cacheKey, qqResult);
+      return res.json(qqResult);
+    }
     const result = await parseSem.run(() => sniffVideoUrl(videoUrl));
     if (result.code === 200) {
       resultCache.set(cacheKey, result);
@@ -1516,6 +1572,16 @@ app.get('/sniff', async (req, res) => {
   }
 
   try {
+    // 腾讯视频专用解析：命中则直接返回（不占用 Provider 并发）
+    const qqUrls = await qqVideoResolve(videoUrl);
+    if (qqUrls && qqUrls.length > 0) {
+      const qqSniff = { urls: qqUrls, hitProviders: 1, totalProviders: 1, durationMs: 0, source: 'qq-official' };
+      universalCache.set(cacheKey, qqSniff);
+      if (detailed) {
+        return res.json({ code: 200, ...qqSniff });
+      }
+      return res.json({ code: 200, url: qqUrls[0], provider: 'qq-official' });
+    }
     // 支持 providers= 过滤，便于调试单家接口（逗号分隔的完整接口前缀）
     let onlyProviders;
     if (req.query.providers) {

@@ -1,4 +1,4 @@
-# 超级嗅探 (Super Sniffer) v2.2
+# 超级嗅探 (Super Sniffer) v2.3
 
 基于 **PHP + Node.js (Puppeteer + Express)** 的视频 m3u8 地址解析服务 + **万能嗅探引擎**。输入视频页面链接或 VIP 播放链接，自动嗅探并返回可播放的 `.m3u8` 播放地址。v2.1 新增 **万能嗅探** 功能，内置 18 个第三方解析接口并发调用，5 种结果提取策略，SSE 流式进度推送，结果去重与速度排名。v2.2 新增「浏览器池 v2 + PagePool 预建复用 + 15s 巡检/RSS 回收原位复活 + Provider 动态评分熔断 Top10 优先 + LRU 持久化热恢复 + 低内存降级 + /healthz 三路探针」。
 
@@ -21,6 +21,9 @@
   - 💾 LRU 缓存 JSONL 持久化，重启 loadFromDisk 热恢复（0 冷启动）
   - 🧠 低内存自动降级：<1GB → 池 1/Page 2；<2GB → 池 2/Page 3
   - 🧪 /healthz/live | /startup | /ready 三路独立探针，容器/K8s/PM2 友好
+- **v2.3 新增**：
+  - 🎬 腾讯视频专用解析：从播放页 URL 提取 `vid`，直连官方 `vv.video.qq.com/getinfo` 接口获取带 `vkey` 的直链播放地址，解决腾讯防盗链
+  - 🔀 cs1 先行版发布更新包（资产带 `-cs1` 后缀），后台切「先行版」更新源即可远程升级源码
 
 ### v2 性能优化对比表
 

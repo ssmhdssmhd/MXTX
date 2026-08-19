@@ -5,6 +5,14 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.3.0] - 2026-08-19
+
+### 腾讯视频专用解析（官方 getinfo 直链）+ cs1 先行版远程更新源码
+
+### Added
+- 🎬 新增腾讯视频专用解析器 `qqVideoResolve`：从播放页 URL 提取 `vid`，直连腾讯官方 `vv.video.qq.com/getinfo` 接口拼接带 `vkey` 的直链播放地址（`platform=11001&fmt=hd`），`/node.js`、`/sniff` 接口优先命中。解决腾讯视频防盗链严格、第三方解析站拿不到可播地址的问题，也避免把 RPC 接口地址当播放链接返回
+- 🔀 发布 cs1 先行版 v2.3.0 Release（含 `super-sniffer-source_2.3.0-cs1.zip` 源码包）：后台「更新源」切到先行版（cs1 分支）后点「更新源码」，即可远程升级到本版本，与稳定版（main 分支）互不干扰
+
 ## [2.2.3] - 2026-08-19
 
 ### 修复万能嗅探误抓接口地址当播放链接（如腾讯视频 GetNewMsgCount）
