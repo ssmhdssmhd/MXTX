@@ -5,6 +5,16 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.4.4] - 2026-08-19
+
+### 更新时保护本地环境配置文件（.user.ini 不随源码更新覆盖）
+
+### Fixed
+- 🛡️ 更新时不再覆盖本机 `.user.ini`（PHP 环境配置，各服务器不同）
+  - 根因：`.user.ini` 被 git 跟踪，git 方式源码更新执行 `git reset --hard origin/<branch>` 时会把该文件重置为远端版本，导致本机 PHP 配置（上传大小 / 内存限制等）被清掉
+  - 修复：新增 `PROTECTED_FILES` 白名单（`.user.ini`），git 方式在 `reset --hard` 前备份本地副本、重置后恢复；zip 方式从替换列表移除，天然不覆盖
+  - 效果：更新源码时，`.user.ini` 始终保留本机配置，不受远端影响
+
 ## [2.4.3] - 2026-08-19
 
 ### /api.php 兼容路由（修复 Cannot GET /api.php）

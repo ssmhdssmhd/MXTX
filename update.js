@@ -122,10 +122,15 @@ const SOURCE_FILES = [
   'README.md',
   'CHANGELOG.md',
   '.gitignore',
-  '.user.ini',
   '1.sh',
   '.env.example'
 ];
+
+// 环境相关文件（各服务器配置不同，如 PHP 的 .user.ini），
+// 更新时一律保留本地版本，不随源码更新覆盖。
+// zip 方式：不出现在 SOURCE_FILES 中，天然不替换；
+// git 方式：reset --hard 会覆盖被跟踪文件，需在重置前后单独保护。
+const PROTECTED_FILES = ['.user.ini'];
 
 // ========== 工具函数 ==========
 
@@ -566,6 +571,16 @@ async function updateSourceViaGit(log, onProgress) {
       fs.cpSync(src, path.join(backupSourceDir, file), { recursive: true });
     }
   }
+  // 环境相关文件（如 .user.ini）单独备份，reset --hard 后会覆盖被跟踪文件，需重置后恢复本地版本
+  const protectedDir = path.join(TMP_DIR, 'protected');
+  rmrf(protectedDir);
+  fs.mkdirSync(protectedDir, { recursive: true });
+  for (const file of PROTECTED_FILES) {
+    const src = path.join(ROOT_DIR, file);
+    if (fs.existsSync(src)) {
+      fs.cpSync(src, path.join(protectedDir, file), { recursive: true });
+    }
+  }
   log('已备份当前源码');
 
   // 4. 确保本地在目标分支并强制同步远端（只影响该分支，不动 main）
@@ -603,6 +618,16 @@ async function updateSourceViaGit(log, onProgress) {
     log('新源码验证失败，已自动回滚到旧版本');
     throw new Error('新源码验证失败，已自动回滚');
   }
+
+  // 5.1 恢复环境相关文件（.user.ini 等）：reset --hard 已把被跟踪文件覆盖为远端版本，
+  // 这里用 reset 前备份的本地副本覆盖回去，保证本地环境配置不被更新抹掉
+  for (const file of PROTECTED_FILES) {
+    const backup = path.join(protectedDir, file);
+    if (fs.existsSync(backup)) {
+      fs.cpSync(backup, path.join(ROOT_DIR, file), { recursive: true });
+    }
+  }
+  rmrf(protectedDir);
 
   rmrf(backupSourceDir);
   log(`源码更新完成，新版本: ${remoteVersion}`);
