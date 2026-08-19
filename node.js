@@ -135,20 +135,55 @@ const MX_AUTO_UPDATE = envBool('MX_AUTO_UPDATE', false);
 const MX_UNIVERSAL_ENABLE = envBool('MX_UNIVERSAL_ENABLE', true);
 const MX_UNIVERSAL_CACHE_MAX = envInt('MX_UNIVERSAL_CACHE_MAX', 200);
 const MX_UNIVERSAL_CACHE_TTL = envInt('MX_UNIVERSAL_CACHE_TTL', 3600);
+const MX_UNIVERSAL_EMPTY_TTL = envInt('MX_UNIVERSAL_EMPTY_TTL', 60); // v2.4.5：嗅探失败（空结果）的短缓存 TTL（秒）。成功结果仍用 MX_UNIVERSAL_CACHE_TTL；失败结果短缓存，避免 Provider 临时故障被缓存成 1 小时「永久失败」
 const MX_UNIVERSAL_DETAILED = envBool('MX_UNIVERSAL_DETAILED', false);
 const MX_UNIVERSAL_CIRCUIT_BREAK = envInt('MX_UNIVERSAL_CIRCUIT_BREAK', 3);  // C2：连续失败次数熔断
 const MX_UNIVERSAL_CB_COOLDOWN = envInt('MX_UNIVERSAL_CB_COOLDOWN', 30);     // C2：熔断冷却秒数
 const MX_UNIVERSAL_PER_PROVIDER_CONC = envInt('MX_UNIVERSAL_PER_PROVIDER_CONC', 2); // 单 provider 并发
 const MX_UNIVERSAL_TOPK_FIRST = envInt('MX_UNIVERSAL_TOPK_FIRST', 10);  // C1：TopK 优先调度
 const MX_UNIVERSAL_BROWSER_MAX = envInt('MX_UNIVERSAL_BROWSER_MAX', 99); // HTTP 提取不到时，最多用浏览器渲染的 Provider 数（默认远大于 Provider 数=全部可用；真正限流靠 MX_UNIVERSAL_CONCURRENCY 并发与页面池，配额只是兜底安全阀）
+const MX_UNIVERSAL_BROWSER_CONC = envInt('MX_UNIVERSAL_BROWSER_CONC', 2); // v2.4.5：万能嗅探「浏览器渲染并发」上限。HTTP 阶段不受限；批量时 18 Provider 全走渲染是内存大头，限制同时渲染数防 OOM 杀进程（单独调用低并发不受影响）
 const MX_DEBUG = envBool('MX_DEBUG', false); // 万能嗅探调试日志（HTTP/浏览器每 Provider 输出详细结果）
 
 // ============================================================
-// 3.1 低内存自动降级（D1 v2.2 新增）
+// 3.1 低内存自动降级（D1 v2.2 新增，v2.4.5 支持 cgroup 容器内存预算）
 // ============================================================
+// 容器 / K8s 中 os.totalmem() 返回宿主机内存，不反映本容器可用预算；
+// 必须读取 cgroup 内存上限，否则降级失效，批量浏览器渲染时易 OOM 杀进程。
+function getCgroupMemLimitMB() {
+  try {
+    const candidates = ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes'];
+    for (const f of candidates) {
+      if (fs.existsSync(f)) {
+        const n = parseInt(fs.readFileSync(f, 'utf8').trim(), 10);
+        if (n > 0 && n < Number.MAX_SAFE_INTEGER) return Math.floor(n / 1024 / 1024);
+      }
+    }
+  } catch (e) { }
+  return 0;
+}
+function getCgroupMemUsedMB() {
+  try {
+    const f = '/sys/fs/cgroup/memory.current';
+    if (fs.existsSync(f)) return Math.floor(parseInt(fs.readFileSync(f, 'utf8').trim(), 10) / 1024 / 1024);
+  } catch (e) { }
+  return 0;
+}
+// 当前容器内存是否已超预算阈值（默认 85%）：超过则跳过浏览器渲染兜底，防止整进程 OOM
+function memoryOverThreshold(ratio) {
+  const limitMB = getCgroupMemLimitMB();
+  if (limitMB <= 0) return false; // 非容器环境，由系统回收
+  const usedMB = getCgroupMemUsedMB();
+  if (usedMB <= 0) return false;
+  return usedMB > Math.max(64, Math.floor(limitMB * (ratio || 0.85)));
+}
+
 (function downgradeByMemory() {
   if (!MX_BROWSER_ENABLE) return;
-  const totalMB = Math.floor((os.totalmem() || 0) / 1024 / 1024);
+  const cgroupMB = getCgroupMemLimitMB();
+  const hostMB = Math.floor((os.totalmem() || 0) / 1024 / 1024);
+  // 可用内存预算取两者较小值（容器场景 cgroup 才是真实约束）
+  const totalMB = cgroupMB > 0 ? Math.min(hostMB, cgroupMB) : hostMB;
   if (totalMB <= 0) return;
   const before = { pool: MX_BROWSER_POOL_SIZE, page: MX_PAGE_POOL_SIZE };
   if (totalMB < 1024) {
@@ -157,10 +192,14 @@ const MX_DEBUG = envBool('MX_DEBUG', false); // 万能嗅探调试日志（HTTP/
   } else if (totalMB < 2048) {
     MX_BROWSER_POOL_SIZE = Math.min(MX_BROWSER_POOL_SIZE, 2);
     MX_PAGE_POOL_SIZE = Math.min(MX_PAGE_POOL_SIZE, 3);
+  } else if (totalMB < 5 * 1024) {
+    // v2.4.5：4GB/4.5GB 级容器（常见 1C/2C 小规格）。3 浏览器×5 页在批量并发渲染下极易 OOM，收紧到 2×3
+    MX_BROWSER_POOL_SIZE = Math.min(MX_BROWSER_POOL_SIZE, 2);
+    MX_PAGE_POOL_SIZE = Math.min(MX_PAGE_POOL_SIZE, 3);
   }
   const changed = (before.pool !== MX_BROWSER_POOL_SIZE) || (before.page !== MX_PAGE_POOL_SIZE);
   if (changed) {
-    console.log(`[超级嗅探] 检测到低内存环境 ${totalMB}MB，自动降级：浏览器池 ${before.pool}→${MX_BROWSER_POOL_SIZE}，PagePool ${before.page}→${MX_PAGE_POOL_SIZE}`);
+    console.log(`[超级嗅探] 检测到内存预算 ${totalMB}MB${cgroupMB > 0 ? '（cgroup 限制）' : ''}，自动降级：浏览器池 ${before.pool}→${MX_BROWSER_POOL_SIZE}，PagePool ${before.page}→${MX_PAGE_POOL_SIZE}`);
   }
 })();
 
@@ -271,6 +310,14 @@ function checkChrome() {
   if (fs.existsSync(MX_CHROME_PATH)) {
     return MX_CHROME_PATH;
   }
+  // v2.4.5：配置路径不存在时，回退到 puppeteer 缓存目录里的 Chrome
+  // （很多环境通过 puppeteer 安装 Chrome，并未放到项目 chrome-linux64/ 下）
+  try {
+    if (puppeteer && typeof puppeteer.executablePath === 'function') {
+      const p = puppeteer.executablePath();
+      if (p && fs.existsSync(p)) return p;
+    }
+  } catch (e) { }
   return undefined;
 }
 
@@ -293,7 +340,8 @@ class LRUCache {
     this.map = new Map();
   }
   _isExpired(entry) {
-    return Date.now() - entry.createdAt > this.ttlMs;
+    const ttlMs = (entry && entry.ttlMs) || this.ttlMs;
+    return Date.now() - entry.createdAt > ttlMs;
   }
   _evictIfNeeded() {
     while (this.map.size > this.maxSize) {
@@ -312,11 +360,13 @@ class LRUCache {
     this.map.set(key, entry);
     return entry.value;
   }
-  set(key, value) {
+  set(key, value, ttlMs) {
     if (this.map.has(key)) {
       this.map.delete(key);
     }
-    this.map.set(key, { value, createdAt: Date.now() });
+    const entry = { value, createdAt: Date.now() };
+    if (ttlMs && ttlMs > 0) entry.ttlMs = ttlMs; // v2.4.5：支持单条目 TTL 覆盖（空结果用短 TTL，避免临时失败被缓存成长期失败）
+    this.map.set(key, entry);
     this._evictIfNeeded();
   }
   has(key) {
@@ -420,6 +470,9 @@ const parseSem = new Semaphore(MX_PARSE_CONCURRENCY);
 const universalCache = new LRUCache({ name: 'universal', persistDir: MX_CACHE_DIR, max: MX_UNIVERSAL_CACHE_MAX, ttlMs: MX_UNIVERSAL_CACHE_TTL * 1000 });
 try { universalCache.loadFromDisk('universal.jsonl'); } catch (e) { }
 const universalSem = new Semaphore(MX_UNIVERSAL_CONCURRENCY);
+// v2.4.5：万能嗅探「浏览器渲染」独立并发信号量。HTTP 阶段（廉价）不受限；
+// 只有浏览器渲染兜底（内存大头）被限制并发，批量嗅探时防 OOM 杀进程导致全体失败。
+const universalBrowserSem = new Semaphore(Math.max(1, MX_UNIVERSAL_BROWSER_CONC));
 
 // 4.5.1 缓存定时持久化（B2 v2.2）
 if (MX_CACHE_PERSIST) {
@@ -508,9 +561,16 @@ async function doSniffOne(fullUrl, targetUrl, timeout) {
 
   // 2) 浏览器渲染兜底：JS / iframe 型接口（如 playm3u8.cn 嵌套播放器）需真实渲染并捕获 m3u8 网络响应
   if (MX_DEBUG) console.log(`[嗅探][决策] ${fullUrl} HTTP 无命中 -> 浏览器兜底? 浏览器=${MX_BROWSER_ENABLE && browserPool.length > 0} 剩余配额=${universalBrowserBudget}`);
-  if (MX_BROWSER_ENABLE && browserPool.length > 0 && universalBrowserBudget > 0) {
+  // v2.4.5：容器内存预算超 85% 时跳过浏览器渲染，宁缺毋滥——避免整进程 OOM 被杀导致批量全部失败
+  if (MX_BROWSER_ENABLE && browserPool.length > 0 && universalBrowserBudget > 0 && !memoryOverThreshold(0.85)) {
     universalBrowserBudget--;
-    return await browserSniff(fullUrl, targetUrl, timeout);
+    // v2.4.5：浏览器渲染并发限流（仅万能嗅探路径，主解析路径不受影响）：
+    // 最多 MX_UNIVERSAL_BROWSER_CONC 个同时渲染；等待额度最多 timeout 上限内，拿不到就快速放弃
+    return await withTimeout(
+      universalBrowserSem.run(() => browserSniff(fullUrl, targetUrl, timeout)),
+      Math.max(1000, Math.min(timeout, 8000)),
+      []
+    );
   }
   return [];
 }
@@ -1719,7 +1779,8 @@ app.get('/sniff', async (req, res) => {
       onlyProviders = req.query.providers.split(',').map((s) => s.trim()).filter(Boolean);
     }
     const result = await universalSem.run(() => runUniversalSniff(videoUrl, onlyProviders ? { providers: onlyProviders } : {}));
-    universalCache.set(cacheKey, result);
+    // v2.4.5：成功结果按完整 TTL 缓存；失败（空结果）仅短缓存，临时故障可快速恢复
+    universalCache.set(cacheKey, result, result && result.urls && result.urls.length > 0 ? undefined : MX_UNIVERSAL_EMPTY_TTL * 1000);
     if (detailed) {
       return res.json({ code: 200, ...result });
     }
@@ -2603,7 +2664,7 @@ function listenWithRetry(port, retries) {
     console.log(`║  缓存目录:    ${String(MX_CACHE_PERSIST ? path.relative(process.cwd(), MX_CACHE_DIR) : '关闭').padEnd(36)}║`);
     console.log(`║  Flush 周期:  ${String(MX_CACHE_FLUSH_INTERVAL + 's').padEnd(36)}║`);
     console.log(`║  熔断 Provider: ${String(PROVIDERS.filter(isProviderCircuitBroken).length + '/' + PROVIDERS.length).padEnd(36)}║`);
-    console.log(`║  TopK 优先:    ${String(MX_UNIVERSAL_TOPK_FIRST + ' / 单Provider并发 ' + MX_UNIVERSAL_PER_PROVIDER_CONC).padEnd(36)}║`);
+    console.log(`║  TopK 优先:    ${String(MX_UNIVERSAL_TOPK_FIRST + ' / 渲染并发 ' + MX_UNIVERSAL_BROWSER_CONC).padEnd(36)}║`);
     console.log('╠══════════════════════════════════════════════════════════════╣');
     console.log(`║  Chrome 路径: ${String(checkChrome() || '使用系统默认').padEnd(36)}║`);
     console.log(`║  当前版本:     v${String(ver).padEnd(36)}║`);

@@ -5,6 +5,24 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.4.5] - 2026-08-19
+
+### 万能嗅探批量失败过多修复（单独调用成功、批量失败）
+
+### Fixed
+- 🐛 修复容器环境下低内存降级失效导致批量 OOM 杀进程
+  - 根因：容器内 `os.totalmem()` 返回宿主内存（如 6GB），而 cgroup 实际限制只有 4GB，导致浏览器池按 3 实例 × 5 页规模启动，批量并发渲染时内存溢出被 cgroup 杀进程，整批请求全部失败
+  - 修复：新增 `getCgroupMemLimitMB` / `getCgroupMemUsedMB`，从 `/sys/fs/cgroup/memory.max`（v2）或 `memory/memory.limit_in_bytes`（v1）读取真实内存预算；4GB 级容器浏览器池收紧到 2 实例 × 3 页
+- 🐛 修复批量调用时 18 个 Provider 全部走浏览器渲染导致内存峰值过高
+  - 修复：新增 `MX_UNIVERSAL_BROWSER_CONC`（默认 2）独立信号量 `universalBrowserSem`，万能嗅探路径同时渲染最多 2 个；主解析路径不受影响
+  - 加固：渲染前检查 cgroup 内存使用率，超过 85% 自动跳过浏览器兜底（宁缺毋滥），避免整进程 OOM
+- 🐛 修复失败结果被长缓存成「永久失败」
+  - 根因：嗅探失败（空结果）与成功结果同用 3600s 长缓存，Provider 临时故障会被缓存 1 小时，导致一段时间内同样 URL 全部失败
+  - 修复：`LRUCache` 支持单条目 TTL 覆盖，成功结果仍按完整 TTL 缓存，失败结果仅缓存 `MX_UNIVERSAL_EMPTY_TTL`（默认 60s），临时故障可快速恢复
+- 🐛 修复 Chrome 路径配置错误导致浏览器兜底不可用
+  - 修复：`checkChrome` 优先使用 puppeteer 自动安装的 Chrome（`puppeteer.executablePath()`），`MX_CHROME_PATH` 配置路径不存在时自动回退到 puppeteer 缓存目录
+- ✅ 验证：并发 10 × 3 轮批量压测 30/30 全部成功（此前批量会 OOM 整片失败），峰值内存 3317MB（此前 3884MB），服务全程存活；成功链路（B站官方解析）保持 100% 成功率，失败优化与成功链路完全隔离
+
 ## [2.4.4] - 2026-08-19
 
 ### 更新时保护本地环境配置文件（.user.ini 不随源码更新覆盖）
