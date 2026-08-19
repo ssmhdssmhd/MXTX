@@ -45,7 +45,7 @@ module.exports = {
         MX_UNIVERSAL_ENABLE: true,
         MX_UNIVERSAL_TIMEOUT: 10000,
         MX_UNIVERSAL_CONCURRENCY: 6,
-        MX_UNIVERSAL_EARLY_HITS: 3,
+        MX_UNIVERSAL_EARLY_HITS: 0, // 0 = 不使用提前命中，全部 Provider 都会执行
         MX_UNIVERSAL_CIRCUIT_BREAK: 3,
         MX_UNIVERSAL_CB_COOLDOWN: 30,
         MX_UNIVERSAL_PER_PROVIDER_CONC: 2,

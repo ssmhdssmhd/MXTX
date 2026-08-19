@@ -931,6 +931,7 @@ async function runUniversalSniff(targetUrl, options) {
         provider,
         status: validUrls.length > 0 ? 'ok' : 'fail',
         count: validUrls.length,
+        urls: validUrls,
         done: ++doneCount,
         total,
         hits: hitCount
@@ -951,6 +952,7 @@ async function runUniversalSniff(targetUrl, options) {
         provider,
         status: 'fail',
         count: 0,
+        urls: [],
         done: ++doneCount,
         total,
         hits: hitCount,
@@ -2398,9 +2400,10 @@ function handleEvent(data) {
     const status = data.status;
     const provider = data.provider;
     const urls = data.urls || [];
+    const hitCount = data.count != null ? data.count : urls.length;
     setProvStatus(i, status, urls);
     if (status === 'ok') {
-      log('[#' + (i+1) + '] ✅ 命中 ' + urls.length + ' 个 URL - ' + (provider || '').slice(0, 50), 'ok');
+      log('[#' + (i+1) + '] ✅ 命中 ' + hitCount + ' 个 URL - ' + (provider || '').slice(0, 50), 'ok');
     } else if (status === 'fail') {
       log('[#' + (i+1) + '] ❌ 未命中 - ' + (provider || '').slice(0, 50), 'fail');
     } else if (status === 'skip') {
@@ -2560,6 +2563,32 @@ app.get('/admin/api/sniff-stream', adminAuth, async (req, res) => {
   sendMsg({ type: 'start', url: videoUrl, totalProviders: PROVIDERS.length });
 
   try {
+    // 官方视频平台专用解析（腾讯/B站/搜狐直连官方接口），命中则直接返回，不再依赖第三方接口
+    // （v2.4.9：修复测试页对腾讯等官方平台链接大量「未命中」的问题）
+    const official = await officialVideoResolve(videoUrl);
+    if (official && official.urls.length > 0) {
+      if (!clientClosed) {
+        sendEvent('progress', {
+          index: 0,
+          provider: official.source,
+          status: 'ok',
+          count: official.urls.length,
+          urls: official.urls,
+          done: 1,
+          total: 1,
+          hits: 1
+        });
+        sendEvent('done', {
+          type: 'done',
+          urls: official.urls,
+          totalProviders: 1,
+          hitProviders: 1,
+          totalUrls: official.urls.length,
+          providers: [{ provider: official.source, status: 'ok', urls: official.urls }]
+        });
+      }
+      return;
+    }
     const result = await universalSem.run(() => runUniversalSniff(videoUrl, {
       onProgress: (p) => {
         if (clientClosed) return;

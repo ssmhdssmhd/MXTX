@@ -5,6 +5,25 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.4.9] - 2026-08-19
+
+### 修复嗅探日志「命中 0 个 URL」、跳过与官方平台大量未命中
+
+### Fixed
+- 🐛 修复嗅探日志「✅ 命中 0 个 URL」显示错误
+  - 根因：SSE `progress` 事件载荷不含 `urls` 字段，前端只能拿 `urls.length`（空数组）当命中数显示
+  - 修复：`runUniversalSniff` 的 `onProgress` 回调补充 `urls` 字段（成功=实际 URL 列表 / 失败=空数组），前端改用 `data.count ?? urls.length` 显示真实命中数量
+- 🐛 修复嗅探测试页（/admin/api/sniff-stream）对腾讯等官方平台链接大量「未命中」
+  - 根因：测试页直接并发调用 18 个第三方解析接口，大多不支持腾讯移动端链接，几乎全部失败
+  - 修复：`/admin/api/sniff-stream` 与 `/sniff` 均改为官方解析优先（`officialVideoResolve`：腾讯 / B站 / 搜狐直连官方接口），命中即直接返回，不再依赖第三方接口
+- 🐛 修复部署配置仍强制「提前命中 3」导致 Provider 被跳过
+  - 根因：代码默认 `MX_UNIVERSAL_EARLY_HITS=0` 已关闭提前命中，但 `ecosystem.config.js`（PM2）、`super-sniffer.service`（systemd）、`deploy/env.example.sh` 仍写死 `=3`，按这些方式部署时依旧命中 3 家就 skip 剩余 15 家
+  - 修复：三处部署配置全部改为 `MX_UNIVERSAL_EARLY_HITS=0`，保证 18 家 Provider 全部执行
+
+### 验证
+- 官方解析优先：腾讯 m.v.qq.com 链接 → `qq-official` 命中 **4 个 mp4 直链**，日志显示 `count: 4`（不再是「命中 0 个 URL」）
+- 全部 Provider 执行：HLS 测试流 18/18 全部执行，**0 跳过**，命中 7 家（此前命中 3 家即提前返回）
+
 ## [2.4.8] - 2026-08-19
 
 ### Provider 全部执行（不再提前 skip 部分解析接口）

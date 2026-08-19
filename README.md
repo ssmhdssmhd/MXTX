@@ -1,5 +1,5 @@
-# 超级嗅探 (Super Sniffer) v2.4.8
-基于 **PHP + Node.js (Puppeteer + Express)** 的视频 m3u8 地址解析服务 + **万能嗅探引擎**。输入视频页面链接或 VIP 播放链接，自动嗅探并返回可播放的 `.m3u8` 播放地址。v2.1 新增 **万能嗅探** 功能，内置 18 个第三方解析接口并发调用，5 种结果提取策略，SSE 流式进度推送，结果去重与速度排名。v2.2 新增「浏览器池 v2 + PagePool 预建复用 + 15s 巡检/RSS 回收原位复活 + Provider 动态评分熔断 Top10 优先 + LRU 持久化热恢复 + 低内存降级 + /healthz 三路探针」。v2.4 修复后台 `/admin` 页面恢复「更新源切换 + 在线更新」（稳定版 main / 先行版 cs1）。v2.4.6 新增 `.env` 自动加载：node.js / api.php 自动跟随实际运行端口，更新后无需再手动改端口/账号。v2.4.7 修复 url 未编码 `&` 导致腾讯视频链接解析不到：散落参数自动合并回 url + 只有 cid 时从页面提取 vid，原基础上增加成功返回。v2.4.8 Provider 全部执行：提前命中默认关闭，18 家解析接口不再 skip 部分。
+# 超级嗅探 (Super Sniffer) v2.4.9
+基于 **PHP + Node.js (Puppeteer + Express)** 的视频 m3u8 地址解析服务 + **万能嗅探引擎**。输入视频页面链接或 VIP 播放链接，自动嗅探并返回可播放的 `.m3u8` 播放地址。v2.1 新增 **万能嗅探** 功能，内置 18 个第三方解析接口并发调用，5 种结果提取策略，SSE 流式进度推送，结果去重与速度排名。v2.2 新增「浏览器池 v2 + PagePool 预建复用 + 15s 巡检/RSS 回收原位复活 + Provider 动态评分熔断 Top10 优先 + LRU 持久化热恢复 + 低内存降级 + /healthz 三路探针」。v2.4 修复后台 `/admin` 页面恢复「更新源切换 + 在线更新」（稳定版 main / 先行版 cs1）。v2.4.6 新增 `.env` 自动加载：node.js / api.php 自动跟随实际运行端口，更新后无需再手动改端口/账号。v2.4.7 修复 url 未编码 `&` 导致腾讯视频链接解析不到：散落参数自动合并回 url + 只有 cid 时从页面提取 vid，原基础上增加成功返回。v2.4.8 Provider 全部执行：提前命中默认关闭，18 家解析接口不再 skip 部分。v2.4.9 修复嗅探日志「命中 0 个 URL」+ 测试页官方平台大量未命中：SSE 补 urls 字段、前端按实际数量显示、官方解析优先、部署配置提前命中统一为 0。
 
 ## 功能特性
 
@@ -41,6 +41,10 @@
   - 🔧 万能嗅探「提前命中」默认关闭（`MX_UNIVERSAL_EARLY_HITS=0`）：默认情况下 **18 家 Provider 全部执行**，不再因为命中 3 家就 skip 剩余接口，解析结果更全、可用性更高
   - 🎛️ 需要提速时可设 `MX_UNIVERSAL_EARLY_HITS=3` 恢复「命中 3 家即提前返回」
   - 🎨 管理后台 / 万能嗅探页 / 启动横幅当提前命中为 0 时显示「全部（不使用提前命中）」
+- **v2.4.9 新增**：
+  - 🐛 修复嗅探日志「✅ 命中 0 个 URL」显示错误：SSE `progress` 事件补充 `urls` 字段，前端改用 `data.count ?? urls.length` 显示真实命中数量
+  - 🎬 嗅探测试页（`/admin/api/sniff-stream`）与 `/sniff` 官方解析优先：腾讯 / B站 / 搜狐直连官方接口，命中即直接返回，不再依赖第三方接口 → 官方平台链接不再大量「未命中」
+  - 🔧 部署配置（PM2 `ecosystem.config.js` / systemd `super-sniffer.service` / `deploy/env.example.sh`）的 `MX_UNIVERSAL_EARLY_HITS` 统一改为 **0**，保证 18 家 Provider 全部执行（此前三处仍写死 3，命中 3 家就 skip 剩余 15 家）
 - **v2.4.7 新增**：
   - 🐛 修复 `url` 参数未做 URL 编码时目标视频 URL 里的 `&` 被拆成独立参数导致参数丢失（如 `?url=...play?cid=xxx&vid=yyy` 的 `vid` 被拆走 → 腾讯解析缺 vid 返回 404）
   - 🔧 新增 `resolveVideoUrl`：自动把散落的、不属于服务自身参数（url/detailed/refresh/providers）的 query 参数合并回 url 查询串，恢复完整视频地址（腾讯 / 搜狐 / 爱奇艺等带 `&` 的平台链接同样受益）
