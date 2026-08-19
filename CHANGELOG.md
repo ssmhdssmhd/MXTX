@@ -5,6 +5,16 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.2.3] - 2026-08-19
+
+### 修复万能嗅探误抓接口地址当播放链接（如腾讯视频 GetNewMsgCount）
+
+### Fixed
+- 🐛 修复 `https://vip.video.qq.com/rpc/trpc.*.GetNewMsgCount` 这类 RPC 接口地址被误判为播放链接的问题
+  - 根因：视频扩展名正则 `\.webm` 无边界，把服务名 `.WebMessageService` 的前 5 个字符 `.webm` 误当作 `.webm` 扩展名，导致 `https://vip.video.qq.com/rpc/trpc.hongji_group.web_message.WebMessageService/GetNewMsgCount?...` 被判定为视频 URL 并返回给用户
+  - 修复：`isVideoUrl` / `VIDEO_URL_REGEX` / `VIDEO_EXT_REGEX` 三处视频扩展名匹配均加「扩展名后不能跟字母数字」边界（`(?![a-z0-9])`），`.webm` 不再误匹配 `.webmessageservice` 等服务名
+  - 加固：`isVideoUrl` 增加 `RPC_URL_RE` 黑名单，路径命中 `/rpc/`、`/trpc/`、`trpc.`、`getnewmsgcount`、`.js/.json/.css` 等接口/静态资源特征且无视频扩展名时直接排除
+
 ## [2.2.2] - 2026-08-19
 
 ### 修复宝塔面板部署启动崩溃（undici 版本兼容）

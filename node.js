@@ -197,7 +197,7 @@ const PROVIDERS = [
 // ============================================================
 const M3U8_REGEX = /https?:\/\/[^\s"'<>\\]+?\.m3u8[^\s"'<>\\]*/g;
 const MP4_REGEX = /https?:\/\/[^\s"'<>\\]+?\.mp4[^\s"'<>\\]*/g;
-const VIDEO_EXT_REGEX = /\.(m3u8|mp4|flv|mkv|avi|mov|wmv|webm|ts)(\?|$)/i;
+const VIDEO_EXT_REGEX = /\.(m3u8|mp4|flv|mkv|avi|mov|wmv|webm|ts)(?![a-z0-9])/i;
 
 function isValidUrl(url) {
   try {
@@ -211,6 +211,10 @@ function isValidUrl(url) {
 // 广告/追踪域名黑名单：这些站点只是跳转广告，不是真正的视频源
 const AD_HOST_RE = /(\.top|\.bid|vsdrwee|8ovqpaw|f3531|go\.google|doubleclick|adservice|\.cn\.ad|[0-9]+\.top)$/i;
 
+// 接口/静态资源特征：命中这些特征的 URL 不是媒体播放地址（除非路径本身含视频扩展名）
+// 例：腾讯视频页面误抓的 https://vip.video.qq.com/rpc/trpc.*.GetNewMsgCount（未读消息接口）
+const RPC_URL_RE = /\/rpc\/|\/trpc\/|trpc\.|getnewmsgcount|(\.js|\.json|\.css|\.woff2?|\.png|\.jpg|\.jpeg|\.gif|\.webp|\.svg)([?#]|$)/i;
+
 // 严格视频 URL 判定：视频扩展名必须出现在 URL 路径（pathname）中，
 // 或 query 中内嵌了完整视频地址；避免误抓广告跳转 URL（如 ref 参数里带 m3u8.tv）
 function isVideoUrl(url) {
@@ -219,8 +223,10 @@ function isVideoUrl(url) {
     const host = u.hostname.toLowerCase();
     if (AD_HOST_RE.test(host)) return false;
     const path = (u.pathname || '').toLowerCase();
-    // 路径包含视频扩展名 / m3u8 路径片段
-    if (/(\.m3u8|\.mp4|\.flv|\.mkv|\.avi|\.mov|\.wmv|\.webm|\.ts|\/m3u8[/?#]|m3u8_[a-z0-9]+)/.test(path)) return true;
+    // 路径包含视频扩展名 / m3u8 路径片段（扩展名后必须不是字母数字，避免把 .webm 误匹配成 .webmessageservice 等服务名）
+    if (/(\.m3u8|\.mp4|\.flv|\.mkv|\.avi|\.mov|\.wmv|\.webm|\.ts)(?![a-z0-9])|\/m3u8[/?#]|m3u8_[a-z0-9]+/.test(path)) return true;
+    // 路径无视频扩展名时，命中接口/静态资源特征直接排除（防止把 RPC 接口当播放地址）
+    if (RPC_URL_RE.test(path)) return false;
     // query 中内嵌完整视频地址（如 /api/play?url=https://xxx/index.m3u8）
     const q = decodeURIComponent(u.search || '');
     if (/(https?:\/\/[^&"'<> ]+?\.(m3u8|mp4|flv)(\?|&|$))/i.test(q)) return true;
@@ -422,7 +428,8 @@ if (MX_CACHE_PERSIST) {
 }
 
 // 4.6 万能嗅探引擎
-const VIDEO_URL_REGEX = /https?:\/\/[^\s"'<>\\]+?\.(m3u8|mp4|flv|mkv|avi|mov|wmv|webm|ts)[^\s"'<>\\]*/ig;
+// 视频扩展名后必须不是字母数字（(?![a-z0-9])），防止 .webm 误匹配 .webmessageservice 等服务名而把 RPC 接口当播放地址
+const VIDEO_URL_REGEX = /https?:\/\/[^\s"'<>\\]+?\.(m3u8|mp4|flv|mkv|avi|mov|wmv|webm|ts)(?![a-z0-9])[^\s"'<>\\]*/ig;
 
 function extractVideoUrls(text) {
   const found = new Set();
