@@ -19,6 +19,7 @@
 - ⬇️ 下载重试机制：失败自动重试 3 次（指数退避），配合 30 分钟响应体超时，解决大文件半途被掐断导致的下载失败
 - 📡 `/admin/api/update` SSE 转发进度事件 + `X-Accel-Buffering: no` 关闭 nginx 缓冲，保证进度实时到达前端
 - 🧭 `/admin/api/check-update` 改用 `findAsset()` 精确匹配 `-cs1` 资产，返回规范化基础版本号供前端展示
+- 🌐 代理自动探测：未配置 `MX_PROXY` 时自动读取系统代理变量（`HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` 及小写），修复沙箱 / 内网环境「检查更新失败: fetch failed」的问题（与 node.js 的 `EnvHttpProxyAgent` 行为保持一致）
 
 ### Nginx 反向代理部署修复（400 Bad Request / Request Header Or Cookie Too Large）
 

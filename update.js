@@ -49,6 +49,26 @@ const GITHUB_TOKEN = envS('GITHUB_TOKEN', '');
 const MX_PROXY = envS('PROXY', '');
 const API_BASE = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}`;
 
+// 代理自动探测：优先 MX_PROXY，其次标准系统代理变量（HTTPS_PROXY/HTTP_PROXY/ALL_PROXY 及小写）。
+// 沙箱 / 公司内网即使不配 MX_PROXY，也能通过系统代理访问 GitHub API 与下载更新包。
+function detectProxy() {
+  const candidates = [
+    'MX_PROXY',
+    'PROXY',
+    'HTTPS_PROXY',
+    'https_proxy',
+    'HTTP_PROXY',
+    'http_proxy',
+    'ALL_PROXY',
+    'all_proxy'
+  ];
+  for (const key of candidates) {
+    const val = process.env[key];
+    if (val && val !== '') return val;
+  }
+  return '';
+}
+
 // 网络参数：大文件下载必须放宽超时（undici 默认 bodyTimeout 300s，
 // 200MB 浏览器包走慢速代理时极易超时被掐断 -> 下载失败）。
 const AGENT_OPTS = {
@@ -57,6 +77,7 @@ const AGENT_OPTS = {
   connectTimeout: 30000         // TCP 连接建立最长等待 30s
 };
 
+// 与 node.js 保持一致：优先 MX_PROXY，未配置时自动读取系统代理变量，无代理则直连
 let dispatcher;
 if (MX_PROXY) {
   try {
@@ -66,7 +87,13 @@ if (MX_PROXY) {
     dispatcher = new Agent(AGENT_OPTS);
   }
 } else {
-  dispatcher = new Agent(AGENT_OPTS);
+  const sysProxy = detectProxy();
+  if (sysProxy) {
+    dispatcher = new ProxyAgent(Object.assign({ uri: sysProxy }, AGENT_OPTS));
+  } else {
+    dispatcher = new Agent(AGENT_OPTS);
+  }
+  setGlobalDispatcher(dispatcher);
 }
 
 const ROOT_DIR = __dirname;
