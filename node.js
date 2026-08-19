@@ -1366,13 +1366,20 @@ async function acquirePageWrapper() {
 }
 
 // ============================================================
-// 7.5 腾讯视频专用解析（vv.video.qq.com/getinfo）
-// 腾讯视频防盗链严格，页面/第三方解析站通常拿不到直接可播地址。
-// 这里直接从 URL 提取 vid，调用腾讯官方 getinfo 接口获取带 vkey 的播放地址。
-// 接口返回 QZOutputJson={...} 形式，播放地址 = ui.url + fn + '?vkey=' + fvkey
+// 7.5 官方视频平台专用解析器（直连官方接口获取直链播放地址）
+// 防盗链严格的大厂视频（腾讯/B站/搜狐等），页面或第三方解析站通常
+// 拿不到直接可播地址。这里按平台从 URL 提取标识（vid / bvid），
+// 调用官方接口获取直链，命中即优先返回；任一解析器失败一律返回 null，
+// 由上层自动回退到浏览器嗅探 / 万能嗅探。
 // ============================================================
 const QQ_HOST_RE = /(^|\.)qq\.com$/i;
+const BILI_HOST_RE = /(^|\.)bilibili\.com$/i;
+const SOHU_HOST_RE = /(^|\.)sohu\.com$/i;
+// 搜狐直链通常无扩展名（http://data.vod.itc.cn/?k=...），用视频 CDN 域名白名单校验
+const SOHU_CDN_RE = /(^|\.)(itc\.cn|sohucs\.com|sohu\.com)$/i;
 
+// ---------- 腾讯视频（vv.video.qq.com/getinfo） ----------
+// 接口返回 QZOutputJson={...} 形式，播放地址 = ui.url + fn + '?vkey=' + fvkey
 async function qqVideoResolve(videoUrl) {
   try {
     const host = String(videoUrl || '').match(/^https?:\/\/([^/]+)/i);
@@ -1412,6 +1419,124 @@ async function qqVideoResolve(videoUrl) {
     if (MX_DEBUG) console.log(`[腾讯解析] ${videoUrl} 失败: ${e.message}`);
     return null;
   }
+}
+
+// ---------- B站（api.bilibili.com/x/web-interface/view + /x/player/playurl） ----------
+const BVID_RE = /\/(BV[0-9A-Za-z]+)/i;
+
+async function biliVideoResolve(videoUrl) {
+  try {
+    const host = String(videoUrl || '').match(/^https?:\/\/([^/]+)/i);
+    if (!host || !BILI_HOST_RE.test(host[1])) return null;
+    const bvid = (String(videoUrl).match(BVID_RE) || [])[1];
+    if (!bvid) return null;
+
+    const headers = { 'User-Agent': MX_USER_AGENT, Referer: 'https://www.bilibili.com/' };
+    // 1) 视频详情 -> cid
+    const viewRes = await undiciFetch(
+      'https://api.bilibili.com/x/web-interface/view?bvid=' + encodeURIComponent(bvid),
+      { dispatcher: universalDispatcher, headers, signal: AbortSignal.timeout(15000) }
+    );
+    if (!viewRes.ok) return null;
+    const viewJson = await viewRes.json();
+    const cid = viewJson && viewJson.data && viewJson.data.cid;
+    if (!cid) return null;
+
+    // 2) 播放地址（fnval=0 -> 单文件 mp4/flv；qn=80 高清，无登录自动降级）
+    const playRes = await undiciFetch(
+      'https://api.bilibili.com/x/player/playurl?bvid=' + encodeURIComponent(bvid) +
+      '&cid=' + encodeURIComponent(cid) + '&qn=80&fnval=0&fourk=1',
+      { dispatcher: universalDispatcher, headers, signal: AbortSignal.timeout(15000) }
+    );
+    if (!playRes.ok) return null;
+    const playJson = await playRes.json();
+    if (!playJson || playJson.code !== 0 || !playJson.data) return null;
+
+    const out = [];
+    const durl = playJson.data.durl;
+    if (durl && durl.length) {
+      for (const item of durl) {
+        if (item && item.url && isValidUrl(item.url) && isVideoUrl(item.url)) out.push(item.url);
+        if (item && Array.isArray(item.backup_url)) {
+          for (const u of item.backup_url) {
+            if (u && isValidUrl(u) && isVideoUrl(u)) out.push(u);
+          }
+        }
+      }
+    }
+    return out.length ? [...new Set(out)] : null;
+  } catch (e) {
+    if (MX_DEBUG) console.log(`[B站解析] ${videoUrl} 失败: ${e.message}`);
+    return null;
+  }
+}
+
+// ---------- 搜狐视频（api.tv.sohu.com/v4/video/info/{vid}.json） ----------
+function extractSohuVid(url) {
+  const s = String(url);
+  // 标准格式：https://tv.sohu.com/v/dXMwODY3MzcyMi8xMzkwMDAyLzE4Mzk4ODA3LnNodG1s.html
+  // 最后一段 base64 解码为 "us08673722/1390002/18398807"，第二段即 vid
+  const m = s.match(/\/v\/([A-Za-z0-9+/=]+?)(?:\.s?html?)/i);
+  if (m) {
+    try {
+      const decoded = Buffer.from(m[1], 'base64').toString('utf8');
+      const parts = decoded.split('/');
+      if (parts.length >= 2 && /^\d+$/.test(parts[1])) return parts[1];
+    } catch (e) {}
+  }
+  // 兜底：xxx/1390002.shtml 直接以数字结尾的路径
+  const n = s.match(/(?:^|[\/_-])(\d{5,})\.shtml/i);
+  return n ? n[1] : null;
+}
+
+async function sohuVideoResolve(videoUrl) {
+  try {
+    const host = String(videoUrl || '').match(/^https?:\/\/([^/]+)/i);
+    if (!host || !SOHU_HOST_RE.test(host[1])) return null;
+    const vid = extractSohuVid(videoUrl);
+    if (!vid) return null;
+
+    const res = await undiciFetch(
+      'https://api.tv.sohu.com/v4/video/info/' + encodeURIComponent(vid) + '.json?plat=6&pt=5',
+      {
+        dispatcher: universalDispatcher,
+        headers: { 'User-Agent': MX_USER_AGENT, Referer: 'https://tv.sohu.com/' },
+        signal: AbortSignal.timeout(15000)
+      }
+    );
+    if (!res.ok) return null;
+    const json = await res.json();
+    if (!json || json.status !== 200 || !json.data) return null;
+    const url = json.data.download_url;
+    // 搜狐直链通常无扩展名（http://data.vod.itc.cn/?k=...），改用视频 CDN 域名白名单校验
+    if (!url || !isValidUrl(url)) return null;
+    try {
+      const u = new URL(url);
+      if (!SOHU_CDN_RE.test(u.hostname)) return null;
+    } catch (e) { return null; }
+    return [url];
+  } catch (e) {
+    if (MX_DEBUG) console.log(`[搜狐解析] ${videoUrl} 失败: ${e.message}`);
+    return null;
+  }
+}
+
+// ---------- 官方解析统一入口：依次尝试各平台，命中即返回 {urls, source} ----------
+async function officialVideoResolve(videoUrl) {
+  const parsers = [
+    ['qq', qqVideoResolve],
+    ['bilibili', biliVideoResolve],
+    ['sohu', sohuVideoResolve]
+  ];
+  for (const [name, fn] of parsers) {
+    try {
+      const urls = await fn(videoUrl);
+      if (urls && urls.length) {
+        return { urls, source: name + '-official' };
+      }
+    } catch (e) {}
+  }
+  return null;
 }
 
 // ============================================================
@@ -1527,12 +1652,12 @@ app.get('/node.js', async (req, res) => {
   }
 
   try {
-    // 腾讯视频专用解析：从 URL 提取 vid 调官方 getinfo 接口，命中则直接返回
-    const qqUrls = await qqVideoResolve(videoUrl);
-    if (qqUrls && qqUrls.length > 0) {
-      const qqResult = { code: 200, url: qqUrls[0], allUrls: qqUrls };
-      resultCache.set(cacheKey, qqResult);
-      return res.json(qqResult);
+    // 官方视频平台专用解析（腾讯/B站/搜狐直连官方接口），命中则直接返回
+    const official = await officialVideoResolve(videoUrl);
+    if (official && official.urls.length > 0) {
+      const r = { code: 200, url: official.urls[0], allUrls: official.urls };
+      resultCache.set(cacheKey, r);
+      return res.json(r);
     }
     const result = await parseSem.run(() => sniffVideoUrl(videoUrl));
     if (result.code === 200) {
@@ -1572,15 +1697,15 @@ app.get('/sniff', async (req, res) => {
   }
 
   try {
-    // 腾讯视频专用解析：命中则直接返回（不占用 Provider 并发）
-    const qqUrls = await qqVideoResolve(videoUrl);
-    if (qqUrls && qqUrls.length > 0) {
-      const qqSniff = { urls: qqUrls, hitProviders: 1, totalProviders: 1, durationMs: 0, source: 'qq-official' };
-      universalCache.set(cacheKey, qqSniff);
+    // 官方视频平台专用解析（腾讯/B站/搜狐直连官方接口），命中则直接返回（不占用 Provider 并发）
+    const official = await officialVideoResolve(videoUrl);
+    if (official && official.urls.length > 0) {
+      const oSniff = { urls: official.urls, hitProviders: 1, totalProviders: 1, durationMs: 0, source: official.source };
+      universalCache.set(cacheKey, oSniff);
       if (detailed) {
-        return res.json({ code: 200, ...qqSniff });
+        return res.json({ code: 200, ...oSniff });
       }
-      return res.json({ code: 200, url: qqUrls[0], provider: 'qq-official' });
+      return res.json({ code: 200, url: official.urls[0], provider: official.source });
     }
     // 支持 providers= 过滤，便于调试单家接口（逗号分隔的完整接口前缀）
     let onlyProviders;

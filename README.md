@@ -22,7 +22,7 @@
   - 🧠 低内存自动降级：<1GB → 池 1/Page 2；<2GB → 池 2/Page 3
   - 🧪 /healthz/live | /startup | /ready 三路独立探针，容器/K8s/PM2 友好
 - **v2.3 新增**：
-  - 🎬 腾讯视频专用解析：从播放页 URL 提取 `vid`，直连官方 `vv.video.qq.com/getinfo` 接口获取带 `vkey` 的直链播放地址，解决腾讯防盗链
+  - 🎬 官方视频平台专用解析器：腾讯 / B站 / 搜狐直连官方接口获取直链播放地址，解决防盗链（B站 bvid→playurl、搜狐 vid→download_url、腾讯 vid→getinfo）
   - 🔀 cs1 先行版发布更新包（资产带 `-cs1` 后缀），后台切「先行版」更新源即可远程升级源码
 
 ### v2 性能优化对比表

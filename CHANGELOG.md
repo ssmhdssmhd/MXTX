@@ -5,6 +5,17 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.4.0] - 2026-08-19
+
+### 官方视频平台专用解析器（腾讯 / B站 / 搜狐）
+
+### Added
+- 🎬 在腾讯视频解析基础上，新增 **B站（bilibili.com）**、**搜狐视频（sohu.com）** 两家官方解析器，统一由 `officialVideoResolve()` 入口依次尝试，命中即优先返回直链（不占用浏览器嗅探 / Provider 并发）
+  - **B站**：从 URL 提取 `bvid`，先调 `api.bilibili.com/x/web-interface/view` 拿 `cid`，再调 `x/player/playurl?qn=80&fnval=0&fourk=1` 取单文件 mp4/flv 直链（含 `backup_url` 备用源），无登录自动降级清晰度
+  - **搜狐**：从 `/v/` base64 路径段解码提取 `vid`，调 `api.tv.sohu.com/v4/video/info/{vid}.json?plat=6&pt=5` 取 `download_url` 直链（`data.vod.itc.cn` 视频 CDN 域名白名单校验）
+- 🔒 平台识别与失败回退：URL 域名不匹配或官方接口失败一律返回 null，自动回退到浏览器嗅探 / 万能嗅探，不影响其他站点
+- 🧪 实测验证：`/node.js`、`/sniff` 对 B站（BV1xx411c7mD → bilivideo.com mp4 直链 3 条）、搜狐（1390002 → data.vod.itc.cn 直链）均返回 code 200
+
 ## [2.3.0] - 2026-08-19
 
 ### 腾讯视频专用解析（官方 getinfo 直链）+ cs1 先行版远程更新源码
