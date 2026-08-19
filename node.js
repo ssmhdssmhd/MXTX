@@ -1776,6 +1776,15 @@ function adminAuth(req, res, next) {
 }
 
 app.get('/admin', adminAuth, (req, res) => {
+  // v2.4.1：优先返回独立 admin.html（含「更新源切换 + 在线更新」），
+  // 文件缺失（如更新过程中被替换）时回退到内置 v2.2 页面，保证后台始终可用
+  try {
+    const adminHtml = fs.readFileSync(path.join(__dirname, 'admin.html'), 'utf8');
+    if (adminHtml && /<html/i.test(adminHtml)) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(adminHtml);
+    }
+  } catch (e) { /* 文件缺失，回退内置页面 */ }
   const html = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
