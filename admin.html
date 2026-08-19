@@ -201,6 +201,37 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* 下载进度条 */
+  .progress-wrap {
+    margin-top: 14px;
+    display: none;
+  }
+  .progress-wrap.active { display: block; }
+  .progress-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+  }
+  .progress-track {
+    height: 10px;
+    background: rgba(255,255,255,.08);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #6366f1, #a855f7);
+    border-radius: 6px;
+    transition: width .2s ease;
+  }
+  .progress-pct { color: var(--text); font-weight: 600; }
+  .progress-phase { color: var(--text-dim); }
+
   .footer {
     text-align: center;
     color: var(--text-dim);
@@ -302,10 +333,21 @@
     ⚡ 一键升级（浏览器 + 源码）
   </button>
 
+  <!-- 下载进度条 -->
+  <div class="progress-wrap" id="progressWrap">
+    <div class="progress-head">
+      <span class="progress-phase" id="progressPhase">正在下载...</span>
+      <span class="progress-pct" id="progressPct">0%</span>
+    </div>
+    <div class="progress-track">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+  </div>
+
   <!-- 日志 -->
   <div class="log-box" id="logBox"><span class="log-time">[系统]</span> 等待操作...</div>
 
-  <div class="footer">超级嗅探 v1.3.0 · 在线更新系统（稳定版 / 先行版）</div>
+  <div class="footer">超级嗅探 v2.2.1 · 在线更新系统（稳定版 / 先行版）</div>
 </div>
 
 <script>
@@ -415,7 +457,8 @@ async function checkUpdate() {
       return;
     }
     latestRelease = data;
-    const latestVer = data.latestVersion;
+    // 用规范化后的基础版本号展示（去掉 -cs1 后缀），分支名单独显示，避免版本不一致
+    const latestVer = data.latestVersionBase || String(data.latestVersion || '').split('-')[0];
     const branchLabel = data.branch ? `（${data.branch} 分支）` : '';
 
     // 源码
@@ -446,9 +489,34 @@ async function checkUpdate() {
 }
 
 // ========== 执行更新 ==========
+function setProgress(p) {
+  const wrap = document.getElementById('progressWrap');
+  const bar = document.getElementById('progressBar');
+  const pctEl = document.getElementById('progressPct');
+  const phaseEl = document.getElementById('progressPhase');
+  wrap.classList.add('active');
+  const pct = Math.max(0, Math.min(100, Math.round(p.pct || 0)));
+  bar.style.width = pct + '%';
+  pctEl.textContent = pct + '%';
+  const phase = p.phase === 'browser' ? '浏览器包' : p.phase === 'source' ? '源码包' : '下载';
+  if (p.total > 0) {
+    const mb = (b) => (b >= 1024 * 1024 ? (b / 1024 / 1024).toFixed(1) + ' MB' : (b / 1024).toFixed(1) + ' KB');
+    phaseEl.textContent = `正在下载${phase} ${mb(p.received || 0)} / ${mb(p.total)}`;
+  } else {
+    phaseEl.textContent = `正在下载${phase}...`;
+  }
+}
+function resetProgress() {
+  const wrap = document.getElementById('progressWrap');
+  wrap.classList.remove('active');
+  document.getElementById('progressBar').style.width = '0%';
+  document.getElementById('progressPct').textContent = '0%';
+}
+
 async function doUpdate(type) {
   if (updating) return;
   setButtons(true);
+  resetProgress();
   log('========== 开始更新 ==========', 'info');
 
   try {
@@ -473,8 +541,11 @@ async function doUpdate(type) {
         try {
           const item = JSON.parse(line);
           if (item.type === 'log') log(item.msg, item.level || 'info');
+          else if (item.type === 'progress') setProgress(item);
           else if (item.type === 'done') {
             log(item.msg, item.ok ? 'ok' : 'err');
+            if (item.ok) setProgress({ pct: 100, phase: '', received: 0, total: 0 });
+            setTimeout(resetProgress, 3000);
             if (item.restart) {
               log('服务即将重启，页面将自动刷新...', 'warn');
               setTimeout(() => location.reload(), 2500);

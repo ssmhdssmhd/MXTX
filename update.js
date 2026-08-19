@@ -49,16 +49,24 @@ const GITHUB_TOKEN = envS('GITHUB_TOKEN', '');
 const MX_PROXY = envS('PROXY', '');
 const API_BASE = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}`;
 
+// 网络参数：大文件下载必须放宽超时（undici 默认 bodyTimeout 300s，
+// 200MB 浏览器包走慢速代理时极易超时被掐断 -> 下载失败）。
+const AGENT_OPTS = {
+  bodyTimeout: 30 * 60 * 1000,  // 完整响应体最长等待 30 分钟（针对大文件下载）
+  headersTimeout: 120000,       // 响应头最长等待 120s
+  connectTimeout: 30000         // TCP 连接建立最长等待 30s
+};
+
 let dispatcher;
 if (MX_PROXY) {
   try {
-    dispatcher = new ProxyAgent(MX_PROXY);
+    dispatcher = new ProxyAgent(Object.assign({ uri: MX_PROXY }, AGENT_OPTS));
     setGlobalDispatcher(dispatcher);
   } catch (e) {
-    dispatcher = new Agent();
+    dispatcher = new Agent(AGENT_OPTS);
   }
 } else {
-  dispatcher = new Agent();
+  dispatcher = new Agent(AGENT_OPTS);
 }
 
 const ROOT_DIR = __dirname;
@@ -187,19 +195,30 @@ function findAsset(release, type) {
   return assets.find((a) => a.name.startsWith(base) && !a.name.includes('-cs1'));
 }
 
-async function downloadFile(url, dest, onProgress) {
-  const headers = { 'User-Agent': 'super-sniffer-updater' };
-  if (GITHUB_TOKEN && url.includes('github.com')) {
-    headers.Authorization = `token ${GITHUB_TOKEN}`;
-  }
+// 单次下载尝试（流式写盘 + 节流进度回调）
+async function downloadOnce(url, dest, headers, onProgress) {
   const res = await fetch(url, { headers, dispatcher });
-  if (!res.ok) throw new Error(`下载失败 (${res.status})`);
+  if (!res.ok) throw new Error(`下载失败 (HTTP ${res.status})`);
 
   const contentLength = Number(res.headers.get('content-length') || 0);
   let received = 0;
+  let lastEmit = 0;
 
   const fileStream = fs.createWriteStream(dest);
   const reader = res.body.getReader();
+
+  const emit = (force) => {
+    if (typeof onProgress !== 'function') return;
+    const now = Date.now();
+    // 节流：至少 200ms 才推送一次进度，避免每块刷屏拖垮 SSE
+    if (!force && now - lastEmit < 200) return;
+    lastEmit = now;
+    const pct =
+      contentLength > 0
+        ? Math.min(100, Math.round((received / contentLength) * 100))
+        : 0;
+    onProgress(received, contentLength, pct);
+  };
 
   try {
     while (true) {
@@ -207,16 +226,41 @@ async function downloadFile(url, dest, onProgress) {
       if (done) break;
       received += value.length;
       fileStream.write(Buffer.from(value));
-      if (typeof onProgress === 'function') {
-        onProgress(received, contentLength);
-      }
+      emit(false);
     }
   } finally {
     fileStream.end();
     await reader.cancel().catch(() => {});
   }
 
+  // 完整性校验：Content-Length 存在但字节数对不上 -> 视为下载失败（大文件半途截断）
+  if (contentLength > 0 && received !== contentLength) {
+    throw new Error(`文件不完整：期望 ${contentLength} 字节，实际 ${received} 字节`);
+  }
+  emit(true); // 收尾补一次 100%
   return received;
+}
+
+async function downloadFile(url, dest, onProgress) {
+  const headers = { 'User-Agent': 'super-sniffer-updater' };
+  if (GITHUB_TOKEN && url.includes('github.com')) {
+    headers.Authorization = `token ${GITHUB_TOKEN}`;
+  }
+
+  const MAX_ATTEMPTS = 3;
+  let lastErr = null;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      return await downloadOnce(url, dest, headers, onProgress);
+    } catch (e) {
+      lastErr = e;
+      if (attempt < MAX_ATTEMPTS) {
+        // 指数退避后重试，应对网络抖动 / 代理瞬断
+        await new Promise((r) => setTimeout(r, attempt * 2000));
+      }
+    }
+  }
+  throw lastErr || new Error('下载失败');
 }
 
 function extractZip(zipPath, destDir) {
@@ -249,9 +293,15 @@ function formatSize(bytes) {
   return bytes + ' B';
 }
 
+// 规范化版本号：去掉 v 前缀与 "-cs1" 等分支后缀，仅保留纯数字段。
+// 例如 "v2.2.1-cs1" -> "2.2.1"，保证 cs1/main 两分支版本可正确比较（递增判断）。
+function normalizeVersion(v) {
+  return String(v || '').replace(/^v/i, '').split('-')[0].trim();
+}
+
 function compareVersions(a, b) {
-  const pa = String(a).split('.').map(Number);
-  const pb = String(b).split('.').map(Number);
+  const pa = normalizeVersion(a).split('.').map(Number);
+  const pb = normalizeVersion(b).split('.').map(Number);
   for (let i = 0; i < 3; i++) {
     const x = pa[i] || 0;
     const y = pb[i] || 0;
@@ -262,7 +312,7 @@ function compareVersions(a, b) {
 
 // ========== 浏览器更新 ==========
 
-async function updateBrowser(log) {
+async function updateBrowser(log, onProgress) {
   log('开始浏览器更新...');
   const release = await getLatestRelease();
   const version = String(release.tag_name || '').replace(/^v/, '');
@@ -275,11 +325,8 @@ async function updateBrowser(log) {
   const backupChromeDir = path.join(BACKUP_DIR, 'chrome-linux64');
 
   log(`下载浏览器包 ${asset.name} (${formatSize(asset.size)})...`);
-  await downloadFile(asset.browser_download_url, zipPath, (recv, total) => {
-    if (total > 0) {
-      const pct = ((recv / total) * 100).toFixed(1);
-      log(`下载进度: ${pct}% (${formatSize(recv)}/${formatSize(total)})`);
-    }
+  await downloadFile(asset.browser_download_url, zipPath, (received, total, pct) => {
+    if (typeof onProgress === 'function') onProgress({ phase: 'browser', received, total, pct });
   });
   log('下载完成，开始解压...');
 
@@ -329,23 +376,27 @@ async function updateBrowser(log) {
 
 // ========== 源码更新 ==========
 
-async function updateSource(log) {
+async function updateSource(log, onProgress) {
   log('开始源码更新...');
   const release = await getLatestRelease();
   const version = String(release.tag_name || '').replace(/^v/, '');
   const asset = findAsset(release, 'source');
   if (!asset) throw new Error('最新 Release 中未找到源码包资产');
 
+  // 版本递增保护：仅当新版本号高于当前版本才更新，防止降级 / 同版本重复覆盖
+  const baseVersion = normalizeVersion(version);
+  if (compareVersions(baseVersion, getCurrentVersion()) <= 0) {
+    log(`已是最新版本（v${getCurrentVersion()}），无需更新`);
+    return { type: 'source', version, skipped: true };
+  }
+
   const zipPath = path.join(TMP_DIR, 'source.zip');
   const extractDir = path.join(TMP_DIR, 'source-extract');
   const backupSourceDir = path.join(BACKUP_DIR, 'source');
 
   log(`下载源码包 ${asset.name} (${formatSize(asset.size)})...`);
-  await downloadFile(asset.browser_download_url, zipPath, (recv, total) => {
-    if (total > 0) {
-      const pct = ((recv / total) * 100).toFixed(1);
-      log(`下载进度: ${pct}% (${formatSize(recv)}/${formatSize(total)})`);
-    }
+  await downloadFile(asset.browser_download_url, zipPath, (received, total, pct) => {
+    if (typeof onProgress === 'function') onProgress({ phase: 'source', received, total, pct });
   });
   log('下载完成，开始解压...');
 
@@ -443,6 +494,7 @@ module.exports = {
   rmrf,
   findDir,
   formatSize,
+  normalizeVersion,
   compareVersions,
   updateBrowser,
   updateSource,

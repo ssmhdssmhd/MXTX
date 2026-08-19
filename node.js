@@ -2249,17 +2249,14 @@ app.get('/admin/api/check-update', adminAuth, async (req, res) => {
     const currentVersion = updater.getCurrentVersion();
     const sourceInfo = updater.getSourceInfo();
 
-    const sourceAsset = (release.assets || []).find((a) =>
-      a.name.startsWith('super-sniffer-source_')
-    );
-    const browserAssetReal = (release.assets || []).find((a) =>
-      a.name.startsWith('super-sniffer-browser_')
-    );
+    const sourceAsset = updater.findAsset(release, 'source');
+    const browserAssetReal = updater.findAsset(release, 'browser');
 
     res.json({
       code: 200,
       currentVersion,
       latestVersion,
+      latestVersionBase: updater.normalizeVersion(latestVersion),
       source: sourceInfo.source,
       branch: sourceInfo.branch,
       sourceLabel: sourceInfo.label,
@@ -2286,8 +2283,9 @@ app.post('/admin/api/update', adminAuth, async (req, res) => {
   }
 
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // 关闭 nginx 缓冲，保证进度实时推送
   res.flushHeaders();
 
   const send = (obj) => {
@@ -2296,18 +2294,20 @@ app.post('/admin/api/update', adminAuth, async (req, res) => {
     } catch (e) { }
   };
   const log = (msg, level = 'info') => send({ type: 'log', msg, level });
+  // 下载进度事件：前端进度条据此实时渲染
+  const onProgress = (p) => send({ type: 'progress', ...p });
 
   try {
     if (type === 'browser') {
-      await updater.updateBrowser(log);
+      await updater.updateBrowser(log, onProgress);
       send({ type: 'done', ok: true, msg: '浏览器更新完成' });
     } else if (type === 'source') {
-      await updater.updateSource(log);
+      await updater.updateSource(log, onProgress);
       send({ type: 'done', ok: true, msg: '源码更新完成，即将重启服务', restart: true });
       setTimeout(() => updater.restartServer(log), 800);
     } else {
-      await updater.updateBrowser(log);
-      await updater.updateSource(log);
+      await updater.updateBrowser(log, onProgress);
+      await updater.updateSource(log, onProgress);
       send({ type: 'done', ok: true, msg: '一键升级完成，即将重启服务', restart: true });
       setTimeout(() => updater.restartServer(log), 800);
     }
