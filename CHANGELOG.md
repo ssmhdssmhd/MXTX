@@ -5,6 +5,17 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.2.1] - 2026-08-19
+
+### Nginx 反向代理部署修复（400 Bad Request / Request Header Or Cookie Too Large）
+
+### Fixed
+- 🚫 新增 [deploy/nginx.conf](deploy/nginx.conf)：修复浏览器访问后台/嗅探页被 nginx 拦截报 `400 Bad Request - Request Header Or Cookie Too Large` 的问题
+  - 根因：nginx 默认 `large_client_header_buffers 4 8k`（总 32KB），浏览器对同域累积较多 Cookie 时请求头超限
+  - 修复：`large_client_header_buffers 8 32k` + `client_header_buffer_size 32k` 加大缓冲
+  - 修复：`proxy_set_header Cookie ""` 剥离 Cookie（应用只依赖 `Authorization` Basic 认证，不依赖 Cookie），从源头消除 Cookie 过大
+  - 适配：SSE 场景关闭 `proxy_buffering`、加大 `proxy_read_timeout`，保证嗅探进度实时推送
+
 ## [2.2.0] - 2026-08-18
 
 ### 浏览器池 v2 + PagePool 复用 + Provider 评分熔断 + 持久化 + 健康探针
