@@ -1630,9 +1630,12 @@ app.use((req, res, next) => {
 });
 
 // ============================================================
-// 10. /node.js 解析主接口
+// 10. /node.js 解析主接口（/api.php 为兼容别名）
 // ============================================================
-app.get('/node.js', async (req, res) => {
+// 说明：项目附带的 api.php 是 PHP 文件，需在 PHP 环境（宝塔/Nginx+PHP）中部署，
+// 不能由 Node 直接执行。为兼容 `http://IP:端口/api.php?url=` 的调用习惯，
+// 这里将 /api.php 与 /node.js 共用同一解析逻辑（等价接口）。
+const nodeJsParseHandler = async (req, res) => {
   const videoUrl = (req.query.url || '').trim();
 
   if (!videoUrl) {
@@ -1667,7 +1670,10 @@ app.get('/node.js', async (req, res) => {
   } catch (err) {
     return res.json({ code: 500, msg: '解析失败: ' + err.message });
   }
-});
+};
+
+app.get('/node.js', nodeJsParseHandler);
+app.get('/api.php', nodeJsParseHandler);
 
 // ============================================================
 // 11. /sniff 万能嗅探对外接口
