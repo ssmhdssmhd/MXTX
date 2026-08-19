@@ -5,6 +5,16 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.2.2] - 2026-08-19
+
+### 修复宝塔面板部署启动崩溃（undici 版本兼容）
+
+### Fixed
+- 🐛 修复宝塔面板 Node v20 部署时 `node node.js` 启动崩溃：`TypeError: webidl.util.markAsUncloneable is not a function`
+  - 根因：`undici` 8.0.3+ 已放弃支持 Node.js v20（官方要求 Node >=22.19.0），其无条件调用 Node 21 才引入的 `worker_threads.markAsUncloneable`，Node 20 上加载即崩溃
+  - 修复：`undici` 从 `^8.10.0` 降级锁定为 `^7.25.0`（实测装 7.29.0），兼容 Node 20，`EnvHttpProxyAgent` 等所用 API 均在 7.2+ 提供，功能不受影响
+  - 同步更新 `package-lock.json`，保证宝塔按 lock 安装时不会回退到 8.x
+
 ## [2.2.1] - 2026-08-19
 
 ### 在线更新系统加固（进度条 / 版本一致 / 大文件下载 / 版本递增保护）
