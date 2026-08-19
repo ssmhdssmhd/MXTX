@@ -50,6 +50,7 @@ const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { fetch: undiciFetch, EnvHttpProxyAgent } = require('undici');
 
 const updater = require('./update');
 
@@ -118,6 +119,15 @@ const MX_UNIVERSAL_CONCURRENCY = envInt('MX_UNIVERSAL_CONCURRENCY', 6);
 const MX_SNIFF_ONE_TIMEOUT = envInt('MX_SNIFF_ONE_TIMEOUT', 15000);
 const MX_UNIVERSAL_EARLY_HITS = envInt('MX_UNIVERSAL_EARLY_HITS', 3);
 
+// --- 出站代理（v2.2 新增）---
+// 沙箱/部分服务器出站必须走 HTTP 代理才能访问外网第三方解析接口。
+// 默认用 undici 的 EnvHttpProxyAgent：自动读取 HTTP_PROXY/HTTPS_PROXY/NO_PROXY，
+// 无代理时自动直连，真实部署无需额外配置；也可用 MX_PROXY 显式指定。
+const MX_PROXY = envStr('MX_PROXY', '');
+const universalDispatcher = MX_PROXY
+  ? new EnvHttpProxyAgent({ httpProxy: MX_PROXY, httpsProxy: MX_PROXY })
+  : new EnvHttpProxyAgent();
+
 // --- 更新 ---
 const MX_AUTO_UPDATE = envBool('MX_AUTO_UPDATE', false);
 
@@ -130,6 +140,8 @@ const MX_UNIVERSAL_CIRCUIT_BREAK = envInt('MX_UNIVERSAL_CIRCUIT_BREAK', 3);  // 
 const MX_UNIVERSAL_CB_COOLDOWN = envInt('MX_UNIVERSAL_CB_COOLDOWN', 30);     // C2：熔断冷却秒数
 const MX_UNIVERSAL_PER_PROVIDER_CONC = envInt('MX_UNIVERSAL_PER_PROVIDER_CONC', 2); // 单 provider 并发
 const MX_UNIVERSAL_TOPK_FIRST = envInt('MX_UNIVERSAL_TOPK_FIRST', 10);  // C1：TopK 优先调度
+const MX_UNIVERSAL_BROWSER_MAX = envInt('MX_UNIVERSAL_BROWSER_MAX', 99); // HTTP 提取不到时，最多用浏览器渲染的 Provider 数（默认远大于 Provider 数=全部可用；真正限流靠 MX_UNIVERSAL_CONCURRENCY 并发与页面池，配额只是兜底安全阀）
+const MX_DEBUG = envBool('MX_DEBUG', false); // 万能嗅探调试日志（HTTP/浏览器每 Provider 输出详细结果）
 
 // ============================================================
 // 3.1 低内存自动降级（D1 v2.2 新增）
@@ -196,17 +208,41 @@ function isValidUrl(url) {
   }
 }
 
+// 广告/追踪域名黑名单：这些站点只是跳转广告，不是真正的视频源
+const AD_HOST_RE = /(\.top|\.bid|vsdrwee|8ovqpaw|f3531|go\.google|doubleclick|adservice|\.cn\.ad|[0-9]+\.top)$/i;
+
+// 严格视频 URL 判定：视频扩展名必须出现在 URL 路径（pathname）中，
+// 或 query 中内嵌了完整视频地址；避免误抓广告跳转 URL（如 ref 参数里带 m3u8.tv）
+function isVideoUrl(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    if (AD_HOST_RE.test(host)) return false;
+    const path = (u.pathname || '').toLowerCase();
+    // 路径包含视频扩展名 / m3u8 路径片段
+    if (/(\.m3u8|\.mp4|\.flv|\.mkv|\.avi|\.mov|\.wmv|\.webm|\.ts|\/m3u8[/?#]|m3u8_[a-z0-9]+)/.test(path)) return true;
+    // query 中内嵌完整视频地址（如 /api/play?url=https://xxx/index.m3u8）
+    const q = decodeURIComponent(u.search || '');
+    if (/(https?:\/\/[^&"'<> ]+?\.(m3u8|mp4|flv)(\?|&|$))/i.test(q)) return true;
+    return false;
+  } catch (e) {
+    return false;
+  }
+}
+
 function extractFromText(text) {
   const found = new Set();
   if (!text || typeof text !== 'string') return [];
   const regex = new RegExp(M3U8_REGEX.source, 'g');
   let match;
   while ((match = regex.exec(text)) !== null) {
-    found.add(match[0].replace(/\\\//g, '/'));
+    const u = match[0].replace(/\\\//g, '/');
+    if (isVideoUrl(u)) found.add(u);
   }
   const mp4Regex = new RegExp(MP4_REGEX.source, 'g');
   while ((match = mp4Regex.exec(text)) !== null) {
-    found.add(match[0].replace(/\\\//g, '/'));
+    const u = match[0].replace(/\\\//g, '/');
+    if (isVideoUrl(u)) found.add(u);
   }
   return [...found];
 }
@@ -396,7 +432,7 @@ function extractVideoUrls(text) {
   while ((match = regex.exec(text)) !== null) {
     let url = match[0].replace(/\\\//g, '/');
     url = url.replace(/[,.，。、；;]+$/g, '');
-    if (isValidUrl(url)) {
+    if (isValidUrl(url) && isVideoUrl(url)) {
       found.add(url);
     }
   }
@@ -407,7 +443,7 @@ function walkJsonForVideoUrls(obj, out) {
   if (!out) out = new Set();
   if (obj === null || obj === undefined) return out;
   if (typeof obj === 'string') {
-    if (VIDEO_EXT_REGEX.test(obj) && isValidUrl(obj)) {
+    if (isValidUrl(obj) && isVideoUrl(obj)) {
       out.add(obj);
     }
     extractVideoUrls(obj).forEach((u) => out.add(u));
@@ -422,7 +458,7 @@ function walkJsonForVideoUrls(obj, out) {
       const v = obj[k];
       const key = String(k).toLowerCase();
       if (typeof v === 'string' && (key.includes('url') || key.includes('src') || key.includes('play') || key.includes('video') || key.includes('m3u8') || key.includes('mp4'))) {
-        if (VIDEO_EXT_REGEX.test(v) && isValidUrl(v)) {
+        if (isValidUrl(v) && isVideoUrl(v)) {
           out.add(v);
         }
         extractVideoUrls(v).forEach((u) => out.add(u));
@@ -433,109 +469,197 @@ function walkJsonForVideoUrls(obj, out) {
   return out;
 }
 
-function makeProxyDispatcher() {
-  const http = require('http');
-  const https = require('https');
-  return (parsed) => (parsed.protocol === 'https:' ? https : http);
+// 硬超时包装：即使底层 Promise 永不 resolve/reject（如 undici abort 失效），也能按时返回兜底值
+function withTimeout(promise, ms, fallback) {
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve(fallback), Math.max(1, ms));
+    Promise.resolve(promise).then(
+      (v) => { clearTimeout(t); resolve(v); },
+      () => { clearTimeout(t); resolve(fallback); }
+    );
+  });
 }
+
+// 浏览器渲染兜底配额：HTTP 提取不到时，最多对前 N 个 Provider 用浏览器渲染（防止并发过载）
+let universalBrowserBudget = Math.max(0, MX_UNIVERSAL_BROWSER_MAX);
 
 async function sniffOne(provider, targetUrl, options) {
   const timeout = (options && options.timeout) || MX_SNIFF_ONE_TIMEOUT;
   const fullUrl = provider + encodeURIComponent(targetUrl);
+  // 外层硬超时，防止某个 Provider 请求卡死拖垮整个嗅探。
+  // 关键：硬超时必须给“浏览器渲染兜底”留足余量——
+  // HTTP 阶段若吃满 timeout（15s 后 abort），浏览器阶段还需 page.goto + 网络捕获（约 20~25s），
+  // 若硬超时只 +3000ms，浏览器兜底会在 page.goto 尚未完成时被掐断，导致 im1907.top 等 Provider 永远进不了渲染兜底。
+  const browserExtra = (MX_BROWSER_ENABLE && browserPool.length > 0) ? 25000 : 3000;
+  return await withTimeout(doSniffOne(fullUrl, targetUrl, timeout), timeout + browserExtra, []);
+}
+
+async function doSniffOne(fullUrl, targetUrl, timeout) {
+  // 1) HTTP 快速阶段：直接抓取接口页面，提取静态可见的视频地址
+  const httpUrls = await httpSniff(fullUrl, targetUrl, timeout);
+  if (httpUrls.length > 0) return httpUrls;
+
+  // 2) 浏览器渲染兜底：JS / iframe 型接口（如 playm3u8.cn 嵌套播放器）需真实渲染并捕获 m3u8 网络响应
+  if (MX_DEBUG) console.log(`[嗅探][决策] ${fullUrl} HTTP 无命中 -> 浏览器兜底? 浏览器=${MX_BROWSER_ENABLE && browserPool.length > 0} 剩余配额=${universalBrowserBudget}`);
+  if (MX_BROWSER_ENABLE && browserPool.length > 0 && universalBrowserBudget > 0) {
+    universalBrowserBudget--;
+    return await browserSniff(fullUrl, targetUrl, timeout);
+  }
+  return [];
+}
+
+// HTTP 阶段：带代理抓取 + 手动重定向 + 文本/JSON 提取
+async function httpSniff(fullUrl, targetUrl, timeout) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
-  const https = require('https');
-  const http = require('http');
+  const MAX_BYTES = 2 * 1024 * 1024;
+
+  // 从响应文本中提取候选视频地址（正则 + JSON / JSONP / JSON 数组）
+  function parseUrlsFromText(raw) {
+    const urls = new Set();
+    if (!raw || typeof raw !== 'string') return [...urls];
+    extractVideoUrls(raw).forEach((u) => urls.add(u));
+    try {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const json = JSON.parse(jsonMatch[0]);
+        walkJsonForVideoUrls(json, urls);
+      }
+    } catch (e) { }
+    try {
+      const jsonpMatch = raw.match(/[\w$]+\s*\(\s*(\{[\s\S]*?\})\s*\)/);
+      if (jsonpMatch) {
+        const json = JSON.parse(jsonpMatch[1]);
+        walkJsonForVideoUrls(json, urls);
+      }
+    } catch (e) { }
+    try {
+      const jsonArrMatch = raw.match(/\[[\s\S]*\]/);
+      if (jsonArrMatch) {
+        const arr = JSON.parse(jsonArrMatch[0]);
+        walkJsonForVideoUrls(arr, urls);
+      }
+    } catch (e) { }
+    return [...urls];
+  }
+
+  // 带代理的 fetch，手动跟随重定向（最多 5 跳），视频直链立即返回
+  const doFetch = async (url, depth) => {
+    const res = await undiciFetch(url, {
+      dispatcher: universalDispatcher,
+      signal: controller.signal,
+      headers: {
+        'User-Agent': MX_USER_AGENT,
+        'Accept': '*/*',
+        'Referer': targetUrl
+      },
+      redirect: 'manual'
+    });
+    if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
+      const loc = res.headers.get('location');
+      const abs = new URL(loc, url).href;
+      if (res.body && res.body.cancel) { try { await res.body.cancel(); } catch (e) { } }
+      if (VIDEO_EXT_REGEX.test(loc)) {
+        return { urls: [abs] };
+      }
+      if (depth < 5) {
+        return doFetch(abs, depth + 1);
+      }
+      return { urls: [] };
+    }
+    if (!isTextResponse({ 'content-type': res.headers.get('content-type') || '' })) {
+      if (res.body && res.body.cancel) { try { await res.body.cancel(); } catch (e) { } }
+      return { urls: [] };
+    }
+    // 流式读取响应体并限制大小
+    const reader = res.body ? res.body.getReader() : null;
+    let raw = '';
+    let bytes = 0;
+    if (reader) {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.length;
+        if (bytes > MAX_BYTES) { await reader.cancel(); break; }
+        raw += Buffer.from(value).toString('utf8');
+      }
+    } else {
+      raw = await res.text();
+    }
+    return { urls: parseUrlsFromText(raw), rawLen: raw.length };
+  };
 
   try {
-    const parsed = new URL(fullUrl);
-    const lib = parsed.protocol === 'https:' ? https : http;
-
-    return await new Promise((resolve, reject) => {
-      const req = lib.get(fullUrl, {
-        signal: controller.signal,
-        headers: {
-          'User-Agent': MX_USER_AGENT,
-          'Accept': '*/*',
-          'Referer': targetUrl
-        },
-        timeout: timeout
-      }, (res) => {
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          const loc = res.headers.location;
-          if (VIDEO_EXT_REGEX.test(loc)) {
-            const abs = new URL(loc, fullUrl).href;
-            clearTimeout(timer);
-            return resolve([abs]);
-          }
-        }
-        if (!isTextResponse(res.headers)) {
-          res.resume();
-          clearTimeout(timer);
-          return resolve([]);
-        }
-        let raw = '';
-        let bytes = 0;
-        const MAX_BYTES = 2 * 1024 * 1024;
-        res.on('data', (chunk) => {
-          bytes += chunk.length;
-          if (bytes <= MAX_BYTES) {
-            raw += chunk.toString('utf8', 0, Math.min(chunk.length, MAX_BYTES - (bytes - chunk.length)));
-          } else {
-            res.destroy();
-          }
-        });
-        res.on('end', () => {
-          clearTimeout(timer);
-          const urls = new Set();
-
-          extractVideoUrls(raw).forEach((u) => urls.add(u));
-
-          try {
-            const jsonMatch = raw.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-              const json = JSON.parse(jsonMatch[0]);
-              walkJsonForVideoUrls(json, urls);
-            }
-          } catch (e) { }
-
-          try {
-            const jsonpMatch = raw.match(/[\w$]+\s*\(\s*(\{[\s\S]*?\})\s*\)/);
-            if (jsonpMatch) {
-              const json = JSON.parse(jsonpMatch[1]);
-              walkJsonForVideoUrls(json, urls);
-            }
-          } catch (e) { }
-
-          try {
-            const jsonArrMatch = raw.match(/\[[\s\S]*\]/);
-            if (jsonArrMatch) {
-              const arr = JSON.parse(jsonArrMatch[0]);
-              walkJsonForVideoUrls(arr, urls);
-            }
-          } catch (e) { }
-
-          resolve([...urls]);
-        });
-        res.on('error', (err) => {
-          clearTimeout(timer);
-          reject(err);
-        });
-      });
-      req.on('error', (err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
-      req.setTimeout(timeout, () => {
-        req.destroy(new Error('timeout'));
-      });
-    });
+    const result = await doFetch(fullUrl, 0);
+    if (MX_DEBUG) console.log(`[嗅探][HTTP] ${fullUrl} -> ${result.urls.length} 个URL（body ${result.rawLen || 0}B）`);
+    return result.urls;
   } catch (err) {
-    clearTimeout(timer);
-    if (err.name === 'AbortError' || err.message === 'timeout') {
-      return [];
-    }
+    if (MX_DEBUG) console.log(`[嗅探][HTTP] ${fullUrl} 失败: ${err.message}`);
     return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 浏览器渲染阶段：真实渲染接口页，捕获 .m3u8 网络响应 + 页面/iframe 文本提取
+async function browserSniff(fullUrl, targetUrl, timeout) {
+  let bw = null;
+  let holder = null;
+  try {
+    if (MX_DEBUG) console.log(`[嗅探][浏览器] ${fullUrl} 开始：获取页面…`);
+    const acquired = await acquirePageWrapper();
+    bw = acquired.bw;
+    holder = acquired.holder;
+    const page = holder.page;
+    if (holder._hits) holder._hits.clear();
+    if (MX_DEBUG) console.log(`[嗅探][浏览器] ${fullUrl} 已获取页面`);
+
+    await page.setUserAgent(MX_USER_AGENT);
+    await page.setViewport({ width: 1280, height: 720 });
+
+    try {
+      if (MX_DEBUG) console.log(`[嗅探][浏览器] ${fullUrl} 开始 page.goto…`);
+      await page.goto(fullUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: Math.min(timeout, MX_PARSE_TIMEOUT)
+      });
+      if (MX_DEBUG) console.log(`[嗅探][浏览器] ${fullUrl} page.goto 完成`);
+    } catch (e) { if (MX_DEBUG) console.log(`[嗅探][浏览器] ${fullUrl} page.goto 失败: ${e.message}`); }
+
+    // 给 JS 播放器时间发起 m3u8 请求：轮询网络捕获，命中即提前返回；最多等 waitCap
+    const waitCap = Math.min(Math.max(MX_EXTRA_WAIT, 4000), timeout, 10000);
+    const waitStart = Date.now();
+    while (Date.now() - waitStart < waitCap) {
+      if (holder._hits && holder._hits.size > 0) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    const urls = new Set();
+    try {
+      const content = await page.content();
+      extractFromText(content).forEach((u) => urls.add(u));
+      extractVideoUrls(content).forEach((u) => urls.add(u));
+      if (MX_DEBUG) console.log(`[嗅探][浏览器] ${fullUrl} page.content ${content.length}B -> 文本提取 ${extractFromText(content).length + extractVideoUrls(content).length} 个URL`);
+    } catch (e) { }
+    for (const frame of page.frames()) {
+      try {
+        const frameContent = await frame.content();
+        extractFromText(frameContent).forEach((u) => urls.add(u));
+        extractVideoUrls(frameContent).forEach((u) => urls.add(u));
+        if (MX_DEBUG) console.log(`[嗅探][浏览器] ${fullUrl} iframe ${frame.url()} -> ${extractFromText(frameContent).length + extractVideoUrls(frameContent).length} 个URL`);
+      } catch (e) { }
+    }
+    if (holder._hits) for (const u of holder._hits) urls.add(u);
+    if (MX_DEBUG) console.log(`[嗅探][浏览器] ${fullUrl} 网络捕获 m3u8 ${holder._hits ? holder._hits.size : 0} 个，共 ${urls.size} 个URL`);
+
+    return [...urls];
+  } catch (e) {
+    if (MX_DEBUG) console.log(`[嗅探][浏览器] ${fullUrl} 早期异常: ${e.message}`);
+    return [];
+  } finally {
+    if (bw && holder) {
+      try { await bw.releasePage(holder); } catch (e) { }
+    }
   }
 }
 
@@ -599,6 +723,8 @@ function dedupResults(urls) {
 
 async function runUniversalSniff(targetUrl, options) {
   const opts = options || {};
+  // 每次请求重置浏览器渲染兜底配额：HTTP 提取不到时，本请求内最多 N 个 Provider 走浏览器渲染（防过载）
+  universalBrowserBudget = Math.max(0, MX_UNIVERSAL_BROWSER_MAX);
   const onProgress = opts.onProgress || (() => {});
   const earlyHits = opts.earlyHits != null ? opts.earlyHits : MX_UNIVERSAL_EARLY_HITS;
   let providers;
@@ -853,7 +979,10 @@ try { loadProviderStats(); } catch (e) { }
 //    A5：共享拦截器 + response m3u8 捕获
 // ============================================================
 // 全局共享黑名单（图片/字体/广告），复用避免重复注册（A5）
-const GLOBAL_BLOCK_RE = /\.(png|jpe?g|gif|webp|svg|ico|woff2?|ttf|eot|otf|css|mp3|wav|flac|aac)(\?|$)/i;
+// 全局请求拦截：只拦截图片/字体/媒体等纯静态资源以提速。
+// 注意：不能拦 .css —— 很多接口页（如 im1907.top）在 css 加载失败时会触发 onerror=alert()，
+// 弹出模态对话框阻塞页面加载，导致 domcontentloaded 永远不触发、page.goto 超时。
+const GLOBAL_BLOCK_RE = /\.(png|jpe?g|gif|webp|svg|ico|woff2?|ttf|eot|otf|mp3|wav|flac|aac)(\?|$)/i;
 const GLOBAL_BLOCK_HOST_RE = /(google-analytics|googletagmanager|doubleclick|adservice|scorecardresearch|facebook|disqus)\./i;
 
 function getProcessRssMB(pid) {
@@ -880,6 +1009,7 @@ class PageHolder {
     this.status = 'idle'; // idle / busy
     this.dead = false;
     this._attached = false;
+    this._hits = new Set(); // 本页面捕获到的视频地址（按页隔离，避免同浏览器多页并发时互相清空）
   }
   async ensureAttachSharedHandlers() {  // A5
     if (this._attached) return;
@@ -893,13 +1023,28 @@ class PageHolder {
       if (GLOBAL_BLOCK_RE.test(url) || GLOBAL_BLOCK_HOST_RE.test(url)) { try { req.abort(); } catch(e){} return; }
       try { req.continue(); } catch(e){}
     });
+    // 自动关闭 JS 对话框：很多接口页会在资源加载失败时弹 alert()/confirm()，
+    // 不处理会阻塞页面 JS 主线程，导致 domcontentloaded 迟迟不触发。
+    p.on('dialog', (d) => { try { d.dismiss(); } catch(e){} });
     p.on('response', async (resp) => {
       try {
         const ct = (resp.headers() && (resp.headers()['content-type'] || '')) || '';
         const url = resp.url();
         if (/\.m3u8(\?|$)/i.test(url) || /mpegurl/i.test(ct)) {
-          if (!this.bw._hits) this.bw._hits = new Set();
-          this.bw._hits.add(url);
+          if (!this._hits) this._hits = new Set();
+          this._hits.add(url);
+          return;
+        }
+        // API / JSON 接口响应：读取 body 提取其中内嵌的视频地址（如 xmflv 的 /Api 返回 JSON）
+        if (/json|javascript|text\//i.test(ct) && /(api|json|play|video|url|jx|hls)/i.test(url)) {
+          try {
+            const body = await resp.text();
+            const found = extractVideoUrls(body);
+            for (const u of found) {
+              if (!this._hits) this._hits = new Set();
+              this._hits.add(u);
+            }
+          } catch (e) {}
         }
       } catch (e) {}
     });
@@ -953,6 +1098,9 @@ class BrowserWrapper {
       '--disable-extensions',
       '--window-size=1280,720'
     ];
+    // 若存在出站代理，让浏览器流量也走代理（MX_PROXY 优先，其次系统 HTTPS_PROXY/HTTP_PROXY）
+    const proxyAddr = MX_PROXY || process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || '';
+    if (proxyAddr) defaultArgs.push(`--proxy-server=${proxyAddr}`);
     const args = [...defaultArgs, ...MX_BROWSER_ARGS];
     this.browser = await puppeteer.launch({
       executablePath: this.executablePath,
@@ -1225,7 +1373,7 @@ async function sniffVideoUrl(videoUrl) {
     bw = acquired.bw;
     holder = acquired.holder;
     page = holder.page;
-    if (bw._hits) bw._hits.clear();
+    if (holder._hits) holder._hits.clear();
 
     await page.setUserAgent(MX_USER_AGENT);
     await page.setViewport({ width: 1280, height: 720 });
@@ -1263,7 +1411,7 @@ async function sniffVideoUrl(videoUrl) {
     } catch (e) { }
     try { await page.goto('about:blank', { timeout: 3000, waitUntil: 'domcontentloaded' }).catch(() => { }); } catch (e) { }
 
-    if (bw._hits) for (const u of bw._hits) allUrls.add(u);
+    if (holder._hits) for (const u of holder._hits) allUrls.add(u);
 
     if (allUrls.size > 0) {
       const sorted = [...allUrls].sort((a, b) => qualityScore(b) - qualityScore(a));
@@ -1339,6 +1487,7 @@ app.get('/node.js', async (req, res) => {
 app.get('/sniff', async (req, res) => {
   const videoUrl = (req.query.url || '').trim();
   const detailed = req.query.detailed != null ? (req.query.detailed === '1' || req.query.detailed === 'true') : MX_UNIVERSAL_DETAILED;
+  const refresh = req.query.refresh === '1' || req.query.refresh === 'true'; // 跳过缓存强制重新嗅探
 
   if (!videoUrl) {
     return res.json({ code: 400, msg: '请提供需要解析的链接' });
@@ -1348,7 +1497,7 @@ app.get('/sniff', async (req, res) => {
   }
 
   const cacheKey = 'universal:' + videoUrl;
-  const cached = universalCache.get(cacheKey);
+  const cached = !refresh ? universalCache.get(cacheKey) : null;
   if (cached) {
     if (detailed) {
       return res.json({ code: 200, ...cached, cached: true });
@@ -1360,7 +1509,12 @@ app.get('/sniff', async (req, res) => {
   }
 
   try {
-    const result = await universalSem.run(() => runUniversalSniff(videoUrl));
+    // 支持 providers= 过滤，便于调试单家接口（逗号分隔的完整接口前缀）
+    let onlyProviders;
+    if (req.query.providers) {
+      onlyProviders = req.query.providers.split(',').map((s) => s.trim()).filter(Boolean);
+    }
+    const result = await universalSem.run(() => runUniversalSniff(videoUrl, onlyProviders ? { providers: onlyProviders } : {}));
     universalCache.set(cacheKey, result);
     if (detailed) {
       return res.json({ code: 200, ...result });
@@ -1429,7 +1583,7 @@ app.get('/admin', adminAuth, (req, res) => {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>超级嗅探管理后台 v2.1</title>
+<title>超级嗅探管理后台 v2.2</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; color: #333; }
@@ -1468,7 +1622,7 @@ a.link:hover { text-decoration: underline; }
 </head>
 <body>
 <div class="header">
-  <h1>🎬 超级嗅探管理后台 v2.1</h1>
+  <h1>🎬 超级嗅探管理后台 v2.2</h1>
   <p>Node.js 视频解析服务 · 万能嗅探 · 在线更新</p>
 </div>
 <div class="container">
@@ -1584,7 +1738,7 @@ app.get('/admin/sniff', adminAuth, (req, res) => {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>万能嗅探测试 v2.1</title>
+<title>万能嗅探测试 v2.2</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; color: #333; }
@@ -1653,7 +1807,7 @@ video { width: 100%; max-height: 500px; background: #000; display: block; }
 </head>
 <body>
 <div class="header">
-  <h1>🔍 万能嗅探测试 v2.1</h1>
+  <h1>🔍 万能嗅探测试 v2.2</h1>
   <p>并发 ${MX_UNIVERSAL_CONCURRENCY} · 提前命中 ${MX_UNIVERSAL_EARLY_HITS} · ${PROVIDERS.length} 个 Provider</p>
 </div>
 <div class="container">
