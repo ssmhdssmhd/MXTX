@@ -55,6 +55,17 @@
 | 低内存适配 | 无 | 无 | 无 | **自动降级：<1GB 池1/Page2；<2GB 池2/Page3** |
 | 健康探针 | 无 | 无 | 无 | **/healthz/live | startup | ready 三路** |
 
+## 版本号管理规则
+
+本项目遵循**语义化版本**（MAJOR.MINOR.PATCH）递增规则：
+
+- **每次修改更新**都必须递增版本号（PATCH 位 +1）：`v2.4.2 → v2.4.3 → v2.4.4 …`
+- **PATCH 位最大为 99**：当版本达到 `2.4.99` 后再有修改，则进位到 `2.5.0`（MINOR +1，PATCH 归 0）
+- **不允许出现 PATCH >= 100 的版本**（如 `2.4.100`）：这是错误格式，应进位为 `2.5.0`
+- 功能新增 / 行为变更时按需提升 MINOR 位（如 `2.4.99 → 2.5.0`），重大不兼容变更提升 MAJOR 位
+- 每次发版需同步更新：`package.json`、`package-lock.json`、`admin.html` 页脚、`CHANGELOG.md`、`README.md`，并重新打包对应分支的源码包
+- 版本号统一为 `v<MAJOR>.<MINOR>.<PATCH>` 格式，先行版（cs1）Release 附加 `-cs1` 后缀
+
 ## 系统要求
 
 - Node.js >= 18.0.0
