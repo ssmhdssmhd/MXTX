@@ -130,7 +130,8 @@ const SOURCE_FILES = [
 // 更新时一律保留本地版本，不随源码更新覆盖。
 // zip 方式：不出现在 SOURCE_FILES 中，天然不替换；
 // git 方式：reset --hard 会覆盖被跟踪文件，需在重置前后单独保护。
-const PROTECTED_FILES = ['.user.ini'];
+// .env 为本机运行配置（端口/后台账号/解析地址等），更新必须保留。
+const PROTECTED_FILES = ['.user.ini', '.env'];
 
 // ========== 工具函数 ==========
 

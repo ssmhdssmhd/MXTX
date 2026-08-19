@@ -24,6 +24,9 @@ backup/
 .env
 .env.local
 
+# 运行时端口文件（v2.4.6：node.js 启动时自动生成，api.php 读取跟随）
+.mx_runtime.json
+
 # 系统文件
 .DS_Store
 Thumbs.db

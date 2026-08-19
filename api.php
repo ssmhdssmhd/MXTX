@@ -62,9 +62,48 @@ function mx_env_bool($key, $legacy, $def) {
     return in_array($v, ['1', 'true', 'yes', 'on'], true);
 }
 
+/** 读取同目录 .env（在线更新不覆盖），用于自动跟随 Node 实际运行端口 */
+function mx_env_file() {
+    static $env = null;
+    if ($env !== null) return $env;
+    $env = [];
+    $f = __DIR__ . '/.env';
+    if (is_file($f)) {
+        foreach (file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+            $line = trim($line);
+            if ($line === '' || $line[0] === '#') continue;
+            $eq = strpos($line, '=');
+            if ($eq === false) continue;
+            $env[trim(substr($line, 0, $eq))] = trim(substr($line, $eq + 1), " \t\"'");
+        }
+    }
+    return $env;
+}
+
+/**
+ * 自动解析 Node.js 解析服务地址（v2.4.6）
+ * 优先级：环境变量 > .env > node.js 运行时端口文件(.mx_runtime.json) > 默认
+ * 同机部署时自动跟随 node.js 实际运行端口，更新后无需再手动改 api.php。
+ */
+function mx_resolve_player_host() {
+    $h = mx_env('MX_PLAYER_HOST', 'PLAYER_HOST', '');
+    if ($h !== '') return rtrim($h, '/');
+    $env = mx_env_file();
+    $h = isset($env['MX_PLAYER_HOST']) ? trim($env['MX_PLAYER_HOST']) : '';
+    if ($h !== '') return rtrim($h, '/');
+    $rf = __DIR__ . '/.mx_runtime.json';
+    if (is_file($rf)) {
+        $j = json_decode((string)file_get_contents($rf), true);
+        if (is_array($j) && !empty($j['port'])) {
+            return 'http://127.0.0.1:' . (int)$j['port'];
+        }
+    }
+    return 'http://127.0.0.1:1314';
+}
+
 // ---------- 1.1 解析服务地址 ----------
-/** Node.js 解析服务地址（无末尾斜杠） */
-$MX_PLAYER_HOST = rtrim((string)mx_env('MX_PLAYER_HOST', 'PLAYER_HOST', 'http://122.51.166.115:1314'), '/');
+/** Node.js 解析服务地址（无末尾斜杠），自动跟随实际运行端口 */
+$MX_PLAYER_HOST = mx_resolve_player_host();
 $MX_PLAYER_URL  = $MX_PLAYER_HOST . '/node.js?url=';
 
 // ---------- 1.2 cURL 超时 ----------

@@ -1,5 +1,5 @@
-# 超级嗅探 (Super Sniffer) v2.4
-基于 **PHP + Node.js (Puppeteer + Express)** 的视频 m3u8 地址解析服务 + **万能嗅探引擎**。输入视频页面链接或 VIP 播放链接，自动嗅探并返回可播放的 `.m3u8` 播放地址。v2.1 新增 **万能嗅探** 功能，内置 18 个第三方解析接口并发调用，5 种结果提取策略，SSE 流式进度推送，结果去重与速度排名。v2.2 新增「浏览器池 v2 + PagePool 预建复用 + 15s 巡检/RSS 回收原位复活 + Provider 动态评分熔断 Top10 优先 + LRU 持久化热恢复 + 低内存降级 + /healthz 三路探针」。v2.4 修复后台 `/admin` 页面恢复「更新源切换 + 在线更新」（稳定版 main / 先行版 cs1）。
+# 超级嗅探 (Super Sniffer) v2.4.6
+基于 **PHP + Node.js (Puppeteer + Express)** 的视频 m3u8 地址解析服务 + **万能嗅探引擎**。输入视频页面链接或 VIP 播放链接，自动嗅探并返回可播放的 `.m3u8` 播放地址。v2.1 新增 **万能嗅探** 功能，内置 18 个第三方解析接口并发调用，5 种结果提取策略，SSE 流式进度推送，结果去重与速度排名。v2.2 新增「浏览器池 v2 + PagePool 预建复用 + 15s 巡检/RSS 回收原位复活 + Provider 动态评分熔断 Top10 优先 + LRU 持久化热恢复 + 低内存降级 + /healthz 三路探针」。v2.4 修复后台 `/admin` 页面恢复「更新源切换 + 在线更新」（稳定版 main / 先行版 cs1）。v2.4.6 新增 `.env` 自动加载：node.js / api.php 自动跟随实际运行端口，更新后无需再手动改端口/账号。
 
 ## 功能特性
 
@@ -32,6 +32,11 @@
   - 🗑️ 失败（空结果）短缓存 `MX_UNIVERSAL_EMPTY_TTL`（默认 60s），临时故障可快速恢复；成功结果仍长缓存
   - 🧭 Chrome 自动适配 puppeteer 安装目录，`MX_CHROME_PATH` 配置失效时不再断送浏览器兜底
   - ✅ 批量验证：并发 10 × 3 轮 30/30 成功、峰值内存 3317MB、服务全程存活；成功链路（官方解析）100% 不受影响
+- **v2.4.6 新增**：
+  - 📄 node.js 自动加载 `.env`：`MX_PORT` / `MX_ADMIN_USER` / `MX_ADMIN_PASS` / `MX_PLAYER_HOST` 只需在 `.env` 维护一份，更新源码后不再需要手动改 node.js 里的默认值
+  - 🧭 node.js 启动时把实际端口写入 `.mx_runtime.json`，同机部署的 api.php 自动读取跟随 → **改端口只需改 `.env`，api.php 不用动**
+  - 🔌 api.php 解析地址自动解析：环境变量 > `.env` > `.mx_runtime.json` 实际端口 > 兜底 `http://127.0.0.1:1314`，不再硬编码 `http://122.51.166.115:1314`
+  - 🛡️ `.env` 加入更新受保护白名单：在线更新（git/zip）都不会覆盖本机 `.env`
 - **v2.4.4 新增**：
   - 🛡️ 更新时保护本地环境配置文件：`.user.ini`（PHP 环境配置，各服务器不同）不随源码更新覆盖，git 方式在 `reset --hard` 前后备份/恢复本地副本，zip 方式从替换列表移除，本机配置始终保留
 - **v2.4.3 新增**：
@@ -95,6 +100,8 @@
 ├── package.json     # Node.js 依赖配置（v2.2：setup/doctor scripts，2.2.0）
 ├── .user.ini        # PHP 运行配置
 ├── .env.example     # 环境变量示例（9 大类 25+ MX_ 变量，v2.2 新增 14 个）
+├── .env             # v2.4.6：本机运行配置（node.js/api.php 自动加载，更新不覆盖）
+├── .mx_runtime.json # v2.4.6：node.js 启动时写入实际监听端口，api.php 自动跟随
 ├── .mx_cache/       # v2.2 新增：LRU 持久化目录（parse.jsonl/universal.jsonl/provider-score.json）
 ├── chrome-linux64/  # 解压后的 Chrome 浏览器（由 1.sh 生成）
 └── node_modules/    # Node.js 依赖
@@ -142,6 +149,10 @@ cp .env.example .env
 # 编辑 .env
 ```
 
+**v2.4.6 起 node.js 会自动加载项目根目录的 `.env`**（已有环境变量优先，不覆盖），
+且 `.env` 已加入更新受保护文件（在线更新不会覆盖它）——
+**端口、后台账号等运行配置只需在 `.env` 维护一次，以后更新源码无需再手动改 node.js**。
+
 ### 4. 启动 Node.js 解析服务
 
 ```bash
@@ -150,11 +161,13 @@ npm start
 node node.js
 ```
 
-默认监听 `1314` 端口，可通过 `MX_PORT` 环境变量修改：
+默认监听 `1314` 端口，可通过 `.env` 中的 `MX_PORT` 或环境变量修改：
 
 ```bash
 MX_PORT=8080 node node.js
 ```
+
+**v2.4.6 起**：服务启动时会把实际监听端口写入 `.mx_runtime.json`，供同机部署的 api.php 自动跟随。
 
 **v2.2 启动控制台**新增两个分区：
 - 【浏览器池 v2.2】显示 poolSize、warmup 结果、PagePool 总数、健康检查间隔
@@ -162,11 +175,13 @@ MX_PORT=8080 node node.js
 
 ### 5. 配置 PHP 前端接口
 
-将 `api.php` 部署到 PHP 环境（如 Nginx + PHP-FPM），通过环境变量指定解析服务地址：
+将 `api.php` 部署到 PHP 环境（如 Nginx + PHP-FPM）。
+
+**v2.4.6 起 api.php 自动跟随 Node 实际运行端口**（同机部署场景）：
+- 先读 `MX_PLAYER_HOST` 环境变量 / `.env`；都没有时读 `.mx_runtime.json` 取 Node 实际端口（`http://127.0.0.1:<端口>`）
+- 因此 **换 Node 端口时，api.php 无需修改**；仅 PHP 与 Node 不同机时才需设置 `MX_PLAYER_HOST`：
 
 ```bash
-# 默认地址为 http://122.51.166.115:1314
-# 如需修改，设置环境变量 MX_PLAYER_HOST
 export MX_PLAYER_HOST="http://127.0.0.1:1314"
 ```
 
@@ -180,7 +195,7 @@ export MX_PLAYER_HOST="http://127.0.0.1:1314"
 |------|------|--------|------|
 | **服务** | MX_PORT | 1314 | Node.js 服务监听端口 |
 | **服务** | MX_HOST | 0.0.0.0 | Node.js 服务绑定地址 |
-| **服务** | MX_PLAYER_HOST | `http://122.51.166.115:1314` | PHP 前端指向的解析服务地址 |
+| **服务** | MX_PLAYER_HOST | 空（自动跟随，兜底 `http://127.0.0.1:1314`） | PHP 前端指向的解析服务地址；留空则读 `.env` / `.mx_runtime.json` 自动跟随 Node 实际端口 |
 | **后台** | MX_ADMIN_USER | admin | Basic Auth 后台用户名 |
 | **后台** | MX_ADMIN_PASS | admin123 | Basic Auth 后台密码 |
 | **浏览器** | MX_CHROME_PATH | `./chrome-linux64/chrome` | Chrome 可执行文件路径 |
@@ -224,7 +239,7 @@ export MX_PLAYER_HOST="http://127.0.0.1:1314"
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| MX_PLAYER_HOST | `http://122.51.166.115:1314` | PHP 调用 Node.js 解析服务的地址 |
+| MX_PLAYER_HOST | 空（自动跟随 Node 实际端口，兜底 `http://127.0.0.1:1314`） | PHP 调用 Node.js 解析服务的地址；仅 PHP 与 Node 不同机时需显式设置 |
 | MX_PHP_TIMEOUT | 30 | PHP cURL 超时时间（秒） |
 | MX_PHP_SSL_VERIFY | 0 | PHP cURL 是否校验 SSL 证书（0=否，1=是） |
 

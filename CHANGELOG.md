@@ -5,6 +5,22 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.4.6] - 2026-08-19
+
+### 配置收敛到 .env：node.js / api.php 自动跟随实际运行端口（更新后无需再手动改）
+
+### Added
+- 📄 node.js 新增轻量 `.env` 自动加载：启动时读取项目根目录 `.env`（已存在的环境变量优先，不覆盖），`MX_PORT` / `MX_ADMIN_USER` / `MX_ADMIN_PASS` / `MX_PLAYER_HOST` 等只需在 `.env` 维护一份，源码更新后无需再手动改 node.js 里的默认值
+- 🧭 node.js 启动时把实际监听端口写入 `.mx_runtime.json`（`{port, host, updatedAt}`），供同机部署的 api.php 自动跟随
+- 🔌 api.php 解析服务地址改为自动解析，优先级：`MX_PLAYER_HOST` 环境变量 > `.env` > `.mx_runtime.json` 实际端口 > 兜底 `http://127.0.0.1:1314`
+  - 同机部署时，Node 换端口只需改 `.env`（或启动参数），api.php 自动跟随，不再需要每次更新改 api.php 第 67 行的硬编码 `http://122.51.166.115:1314`
+
+### Changed
+- 🛡️ `PROTECTED_FILES` 白名单新增 `.env`：在线更新（git/zip 两种方式）都不会覆盖本机 `.env`，运行配置稳定保留
+
+### Fixed
+- ✅ 消除「每次更新都要手动改 node.js 端口/账号、api.php 转发地址」的痛点
+
 ## [2.4.5] - 2026-08-19
 
 ### 万能嗅探批量失败过多修复（单独调用成功、批量失败）

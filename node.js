@@ -1,7 +1,7 @@
 /**
- * 超级嗅探 - Node.js 视频解析服务 v2.2
+ * 超级嗅探 - Node.js 视频解析服务 v2.4.6
  *
- * 版本：v2.2
+ * 版本：v2.4.6
  *
  * 功能概述：
  *   1. 核心解析接口 /node.js：使用 Puppeteer 无头浏览器打开目标视频页面，
@@ -54,6 +54,30 @@ const { fetch: undiciFetch, EnvHttpProxyAgent } = require('undici');
 
 const updater = require('./update');
 
+// --- 轻量 .env 自动加载（v2.4.6）---
+// .env 不在更新覆盖列表（不在 SOURCE_FILES、被 .gitignore 忽略），
+// 因此 MX_PORT / MX_ADMIN_USER / MX_ADMIN_PASS / MX_PLAYER_HOST 等
+// 只需在 .env 维护一次，更新源码后无需再手动改默认值。
+// 已存在的环境变量优先（不覆盖）。
+(function loadEnvFile() {
+  try {
+    const envFile = path.join(__dirname, '.env');
+    if (!fs.existsSync(envFile)) return;
+    for (const line of fs.readFileSync(envFile, 'utf8').split(/\r?\n/)) {
+      const t = line.trim();
+      if (!t || t.startsWith('#')) continue;
+      const idx = t.indexOf('=');
+      if (idx <= 0) continue;
+      const key = t.slice(0, idx).trim();
+      let val = t.slice(idx + 1).trim();
+      if (val.length >= 2 && ((val[0] === '"' && val[val.length - 1] === '"') || (val[0] === "'" && val[val.length - 1] === "'"))) {
+        val = val.slice(1, -1);
+      }
+      if (process.env[key] === undefined) process.env[key] = val;
+    }
+  } catch (e) { /* .env 解析失败不阻塞启动 */ }
+})();
+
 // ============================================================
 // 3. 环境变量辅助函数 + 所有 MX_ 配置变量（含 v2.2 新增 14 项）
 // ============================================================
@@ -79,6 +103,14 @@ function envInt(key, def) {
 // --- 服务配置 ---
 const MX_PORT = envInt('MX_PORT', envInt('PORT', 1314));
 const MX_HOST = envStr('MX_HOST', '0.0.0.0');
+
+// --- 运行时端口落盘（v2.4.6）---
+// 把实际监听端口写入 .mx_runtime.json，供同机部署的 api.php 自动跟随，
+// 无需在 api.php 里手动改端口。
+try {
+  fs.writeFileSync(path.join(__dirname, '.mx_runtime.json'),
+    JSON.stringify({ port: MX_PORT, host: MX_HOST, updatedAt: new Date().toISOString() }, null, 2));
+} catch (e) { /* 写失败不阻塞启动 */ }
 
 // --- 后台配置 ---
 const MX_ADMIN_USER = envStr('MX_ADMIN_USER', 'admin');
