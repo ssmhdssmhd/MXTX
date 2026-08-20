@@ -213,6 +213,30 @@ function memoryOverThreshold(ratio) {
   return usedMB > Math.max(64, Math.floor(limitMB * (ratio || 0.85)));
 }
 
+// v2.6.4：内存上报同时考虑 cgroup 容器预算。
+// 关键修复：os.totalmem()/os.freemem() 在容器里返回的是「宿主机」内存，宿主机负载高或
+// 有其他租户时，后台会误报「内存紧张/告急」，且无法反映本容器真实剩余。容器场景优先用 cgroup。
+function getSystemMemInfo() {
+  const cgroupMB = getCgroupMemLimitMB();
+  const cgroupUsedMB = getCgroupMemUsedMB();
+  if (cgroupMB > 0 && cgroupUsedMB > 0) {
+    return {
+      totalMB: cgroupMB,
+      usedMB: cgroupUsedMB,
+      freeMB: Math.max(0, cgroupMB - cgroupUsedMB),
+      source: 'cgroup'
+    };
+  }
+  const totalMB = Math.floor((os.totalmem() || 0) / 1024 / 1024);
+  const freeMB = Math.floor((os.freemem() || 0) / 1024 / 1024);
+  return {
+    totalMB,
+    usedMB: Math.max(0, totalMB - freeMB),
+    freeMB,
+    source: 'os'
+  };
+}
+
 (function downgradeByMemory() {
   if (!MX_BROWSER_ENABLE) return;
   const cgroupMB = getCgroupMemLimitMB();
@@ -1408,6 +1432,37 @@ function getProcessRssMB(pid) {
   } catch (e) { return 0; }
 }
 
+// v2.6.4：统计「整棵 Chrome 进程树」RSS（主进程 + 所有渲染器/GPU/网络等子进程）。
+// 关键修复：Chrome 主进程的 VmRSS 只有几十 MB，真正的内存大头在渲染器子进程里；
+// 之前健康巡检只量主进程 RSS（getProcessRssMB），1200MB 阈值永远触发不了，
+// 泄露的渲染器内存无法回收 → 容器 cgroup 一路涨到 85% 触发「内存告急」并跳过渲染兜底、命中率骤降。
+// 这里通过 ps 递归累加主进程的所有后代进程 RSS，得到浏览器真实占用。
+function getChromeTreeRssMB(mainPid) {
+  try {
+    if (!mainPid) return 0;
+    const { execFileSync } = require('child_process');
+    const out = execFileSync('ps', ['-eo', 'pid=,ppid=,rss='], { encoding: 'utf8', timeout: 5000 });
+    const children = new Map(); // ppid -> [pid]
+    const rss = new Map();      // pid -> RSS(kB)
+    for (const line of out.split('\n')) {
+      const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)$/);
+      if (!m) continue;
+      const pid = m[1], ppid = m[2], kb = parseInt(m[3], 10) || 0;
+      rss.set(pid, kb);
+      if (!children.has(ppid)) children.set(ppid, []);
+      children.get(ppid).push(pid);
+    }
+    let total = 0;
+    const stack = [String(mainPid)];
+    while (stack.length) {
+      const cur = stack.pop();
+      total += rss.get(cur) || 0;
+      for (const c of (children.get(cur) || [])) stack.push(c);
+    }
+    return Math.floor(total / 1024);
+  } catch (e) { return 0; }
+}
+
 class PageHolder {
   constructor(page, browserWrapper) {
     this.page = page;
@@ -1625,7 +1680,9 @@ class BrowserWrapper {
     } catch (e) { return false; }
     return true;
   }
-  memoryMB() { return getProcessRssMB(this._pid); }
+  // v2.6.4：改用「整棵进程树」RSS（含渲染器/GPU/网络子进程），真实反映浏览器内存占用，
+  // 避免主进程 RSS 偏小导致回收阈值永远不触发、泄露内存无法回收
+  memoryMB() { return getChromeTreeRssMB(this._pid); }
 }
 
 let browserPool = [];
@@ -1757,6 +1814,29 @@ async function browserPoolHealthCheck() {
     try { await nb.launch(); await nb.initPagePool(); browserPool.push(nb); }
     catch (e) { console.log(`[超级嗅探] 补齐浏览器池实例失败: ${e.message}`); break; }
   }
+  // v2.6.4：内存压力主动释放——容器 cgroup 用量超 70% 时回收最重的一个空闲浏览器，
+  // 避免内存一路爬升到 85%（渲染兜底整体跳过、命中率骤降），把「内存告急」消灭在萌芽。
+  try {
+    const limitMB = getCgroupMemLimitMB();
+    if (limitMB > 0 && browserPool.length > 1) {
+      const usedMB = getCgroupMemUsedMB();
+      if (usedMB > Math.floor(limitMB * 0.7)) {
+        let heaviest = null, heaviestMem = 0;
+        for (const bw of browserPool) {
+          const hasBusy = (bw.pagePool || []).some((h) => h.status === 'busy');
+          if (hasBusy) continue; // 有进行中的渲染不打断
+          const mem = bw.memoryMB();
+          if (mem > heaviestMem) { heaviestMem = mem; heaviest = bw; }
+        }
+        if (heaviest) {
+          const idx = browserPool.indexOf(heaviest);
+          console.log(`[超级嗅探] cgroup 内存 ${usedMB}MB/${limitMB}MB (>70%)，回收最重空闲浏览器释放内存（树RSS ${heaviestMem}MB）`);
+          try { await heaviest.close(); } catch(e){}
+          if (idx >= 0) browserPool.splice(idx, 1);
+        }
+      }
+    }
+  } catch (e) { }
 }
 
 async function nextBrowser() {
@@ -2230,6 +2310,7 @@ app.get('/sniff', async (req, res) => {
 // ============================================================
 app.get('/', (req, res) => {
   const poolStats = browserPoolStats();
+  const sysMem = getSystemMemInfo();
   res.json({
     code: 200,
     msg: '超级嗅探解析服务运行中',
@@ -2239,7 +2320,7 @@ app.get('/', (req, res) => {
     browserPool: poolStats.browsers,
     pagePoolTotal: poolStats.pagesTotal,
     pagePoolBusy: poolStats.pagesBusy,
-    memory: { totalMB: Math.floor(os.totalmem() / 1024 / 1024), freeMB: Math.floor(os.freemem() / 1024 / 1024) },
+    memory: { totalMB: sysMem.totalMB, usedMB: sysMem.usedMB, freeMB: sysMem.freeMB, source: sysMem.source },
     providerStats: { rankedTop5: rankedProviders().slice(0, 5).map(p => ({ p, score: providerScore(p), broken: isProviderCircuitBroken(p) })) },
     cache: {
       parse: resultCache.size,
@@ -2817,6 +2898,7 @@ app.get('/admin/api/status', adminAuth, (req, res) => {
   const version = updater.getCurrentVersion();
   const sourceInfo = updater.getSourceInfo();
   const poolStats = browserPoolStats();
+  const sysMem = getSystemMemInfo();
   res.json({
     code: 200,
     service: '运行中',
@@ -2832,7 +2914,7 @@ app.get('/admin/api/status', adminAuth, (req, res) => {
     pagePoolTotal: poolStats.pagesTotal,
     pagePoolBusy: poolStats.pagesBusy,
     providers: PROVIDERS.length,
-    memory: { totalMB: Math.floor(os.totalmem() / 1024 / 1024), freeMB: Math.floor(os.freemem() / 1024 / 1024) },
+    memory: { totalMB: sysMem.totalMB, usedMB: sysMem.usedMB, freeMB: sysMem.freeMB, source: sysMem.source },
     providerStats: { rankedTop5: rankedProviders().slice(0, 5).map(p => ({ p, score: providerScore(p), broken: isProviderCircuitBroken(p) })) },
     universal: {
       enabled: true,

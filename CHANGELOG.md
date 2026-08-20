@@ -5,6 +5,23 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.6.4] - 2026-08-20
+
+### 紧急修复「内存告急」
+
+### Fixed
+- 🐛 **修复浏览器 RSS 巡检失效 → 泄露内存无法回收**：`BrowserWrapper.memoryMB()` 原来只读取 Chrome **主进程**的 `/proc/<pid>/status` VmRSS，而 Chromium 真正的内存大头在渲染器/GPU/网络等**子进程**里（主进程 RSS 仅几十 MB）——`MX_BROWSER_MAX_MEM_MB`（默认 1200MB）阈值永远触发不了，长期运行后渲染器内存持续增长、垃圾回收机制失灵，容器 cgroup 一路涨到 85% 触发「内存告急」并**整体跳过浏览器渲染兜底、命中率骤降**
+  - 新增 `getChromeTreeRssMB(mainPid)`：通过 `ps` 递归累加 Chrome 主进程的**整棵进程树** RSS，`memoryMB()` 改用它，健康巡检能真实感知每个浏览器的占用并按时回收/复活
+- 🐛 **修复后台内存误报「内存告急」**：`/` 与 `/admin/api/status` 的 `memory` 字段原来用 `os.totalmem()/os.freemem()`，在容器里返回的是**宿主机**内存——宿主机负载高或有其他租户时后台误报「内存紧张/告急」、无法反映本容器真实剩余
+  - 新增 `getSystemMemInfo()`：容器场景优先读取 cgroup 真实预算（`memory.max` / `memory.current`）上报 `totalMB/usedMB/freeMB/source`，非容器回退 `os`；`admin.html` 仪表盘优先使用 `usedMB`，并标注「（容器）」
+
+### Changed
+- 🩺 健康巡检新增**内存压力主动释放**：容器 cgroup 用量超 **70%** 时，回收最重的一个**空闲**浏览器（不打断进行中的渲染），把内存从源头压下来，避免爬到 85% 才触发渲染兜底整体跳过
+
+### 验证
+- `node --check node.js` 语法通过
+- 实测：cgroup 4GB 限制下状态接口上报 `totalMB:4096, usedMB:<真实值>, source:'cgroup'`（此前误报宿主机 5997MB）；Chrome 进程树 RSS 统计正确（主进程 + 渲染器合计）
+
 ## [2.6.3] - 2026-08-20
 
 ### 修复后台误报「服务离线」与「检查更新失败」

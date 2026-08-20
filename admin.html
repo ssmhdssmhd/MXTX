@@ -525,9 +525,11 @@ function drawChart() {
 // ========== 渲染运行监控 ==========
 function renderDashboard(data) {
   const mem = data.memory || {};
-  const used = Math.max(0, (mem.totalMB || 0) - (mem.freeMB || 0));
+  // v2.6.4：优先使用服务端上报的 usedMB（cgroup 容器真实用量），兼容旧字段
+  const used = Math.max(0, mem.usedMB != null ? mem.usedMB : (mem.totalMB || 0) - (mem.freeMB || 0));
   const memPct = mem.totalMB ? Math.round((used / mem.totalMB) * 100) : 0;
-  const freePct = mem.totalMB ? Math.round(((mem.freeMB || 0) / mem.totalMB) * 100) : 0;
+  const freePct = mem.totalMB ? Math.round(Math.max(0, (mem.freeMB || 0)) / mem.totalMB * 100) : 0;
+  const memSrc = mem.source === 'cgroup' ? '（容器）' : '';
 
   // KPI
   setText('kpiBrowser', (data.browserPool ?? '?') + ' 个');
@@ -550,7 +552,7 @@ function renderDashboard(data) {
     memBar.style.width = memPct + '%';
     memBar.className = 'fill-' + (memPct > 85 ? 'red' : memPct > 60 ? 'orange' : 'blue');
   }
-  setText('memVal', used.toLocaleString() + ' / ' + (mem.totalMB || 0).toLocaleString() + ' MB');
+  setText('memVal', used.toLocaleString() + ' / ' + (mem.totalMB || 0).toLocaleString() + ' MB' + memSrc);
   const freeBar = document.getElementById('freeBar');
   if (freeBar) freeBar.style.width = freePct + '%';
   setText('freeVal', freePct + '%');
