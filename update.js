@@ -140,7 +140,9 @@ function getUpdateSource() {
     const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
     return cfg.source === 'beta' ? 'beta' : 'stable';
   } catch (e) {
-    return 'stable';
+    // 本分支为 cs1 先行版：update-config.json 缺失（首次部署 / git 拉取不含本地配置）时，
+    // 默认走先行版源（cs1 分支），确保部署本分支代码即检查 cs1 最新版本，而非稳定版（main）旧版本
+    return 'beta';
   }
 }
 

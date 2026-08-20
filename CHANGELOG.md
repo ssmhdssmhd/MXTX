@@ -24,6 +24,8 @@
   - 修复：排序函数改为返回纯字符串；`/admin/api/rules` 的 `globalTop5` 改用 `providerScore(p)` 计算，删除 `_rankScore`/`_broken` 依赖 → 平台记忆、失败原因、熔断跨请求正确复用，统计文件无重复
 - ✨ `/sniff` 与 `/admin/api/sniff-stream` 新增 `official=0` 参数：跳过官方直连、强制跑全部 18 家 Provider，用于失败原因分析与第三方接口调试（腾讯等官方平台解析始终优先，默认不受影响）
 - 🐛 修复管理后台页脚版本显示陈旧：页脚 `v2.4.8` 硬编码改为动态读取 `/admin/api/status` 的当前版本，随实际版本自动更新，不再落后于最新版
+- 🐛 修复部署 cs1 分支代码后「获取不到 cs1 最新代码」：`update-config.json` 为本地配置（gitignored，不随 git 推送），服务器缺失该文件时 `getUpdateSource()` 默认 stable（main 分支）导致检查到旧版
+  - 修复：cs1 分支 `update.js` 的 `getUpdateSource()` 在配置缺失时默认 `beta`（先行版/cs1 分支），部署 cs1 分支代码即默认检查 cs1 最新版本；已有本地配置仍以配置为准
 
 ### 验证
 - 官方解析优先：腾讯 m.v.qq.com 链接 → `qq-official` 命中 **4 个 mp4 直链**，SSE `count: 4`（不再是「命中 0 个 URL」）
