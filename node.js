@@ -618,13 +618,19 @@ async function sniffOne(provider, targetUrl, options) {
   // HTTP 阶段若吃满 timeout（15s 后 abort），浏览器阶段还需 page.goto + 网络捕获（约 20~25s），
   // 若硬超时只 +3000ms，浏览器兜底会在 page.goto 尚未完成时被掐断，导致 im1907.top 等 Provider 永远进不了渲染兜底。
   const browserExtra = (MX_BROWSER_ENABLE && browserPool.length > 0) ? 25000 : 3000;
-  return await withTimeout(doSniffOne(fullUrl, targetUrl, timeout), timeout + browserExtra, []);
+  const urls = await withTimeout(doSniffOne(fullUrl, targetUrl, timeout), timeout + browserExtra, []);
+  // 失败原因标记：doSniffOne 内部已带 _reason（http-error/no-match/render-no-match 等），
+  // 若为 null 且无结果 → 说明整体超时
+  if (!urls._reason) urls._reason = urls.length > 0 ? 'ok' : 'timeout';
+  return urls;
 }
 
 async function doSniffOne(fullUrl, targetUrl, timeout) {
   // 1) HTTP 快速阶段：直接抓取接口页面，提取静态可见的视频地址
   const httpUrls = await httpSniff(fullUrl, targetUrl, timeout);
-  if (httpUrls.length > 0) return httpUrls;
+  if (httpUrls.length > 0) { httpUrls._reason = 'http'; return httpUrls; }
+  // 记录 HTTP 阶段失败原因（http-error / not-text / no-match）
+  const httpReason = httpUrls._reason || 'no-match';
 
   // 2) 浏览器渲染兜底：JS / iframe 型接口（如 playm3u8.cn 嵌套播放器）需真实渲染并捕获 m3u8 网络响应
   if (MX_DEBUG) console.log(`[嗅探][决策] ${fullUrl} HTTP 无命中 -> 浏览器兜底? 浏览器=${MX_BROWSER_ENABLE && browserPool.length > 0} 剩余配额=${universalBrowserBudget}`);
@@ -633,13 +639,19 @@ async function doSniffOne(fullUrl, targetUrl, timeout) {
     universalBrowserBudget--;
     // v2.4.5：浏览器渲染并发限流（仅万能嗅探路径，主解析路径不受影响）：
     // 最多 MX_UNIVERSAL_BROWSER_CONC 个同时渲染；等待额度最多 timeout 上限内，拿不到就快速放弃
-    return await withTimeout(
+    const urls = await withTimeout(
       universalBrowserSem.run(() => browserSniff(fullUrl, targetUrl, timeout)),
       Math.max(1000, Math.min(timeout, 8000)),
       []
     );
+    if (urls.length > 0) { urls._reason = 'render'; return urls; }
+    const no = [];
+    no._reason = urls._reason || 'render-no-match';
+    return no;
   }
-  return [];
+  const noBrowser = [];
+  noBrowser._reason = httpReason;
+  return noBrowser;
 }
 
 // HTTP 阶段：带代理抓取 + 手动重定向 + 文本/JSON 提取
@@ -703,7 +715,7 @@ async function httpSniff(fullUrl, targetUrl, timeout) {
     }
     if (!isTextResponse({ 'content-type': res.headers.get('content-type') || '' })) {
       if (res.body && res.body.cancel) { try { await res.body.cancel(); } catch (e) { } }
-      return { urls: [] };
+      return { urls: [], notText: true };
     }
     // 流式读取响应体并限制大小
     const reader = res.body ? res.body.getReader() : null;
@@ -726,10 +738,14 @@ async function httpSniff(fullUrl, targetUrl, timeout) {
   try {
     const result = await doFetch(fullUrl, 0);
     if (MX_DEBUG) console.log(`[嗅探][HTTP] ${fullUrl} -> ${result.urls.length} 个URL（body ${result.rawLen || 0}B）`);
-    return result.urls;
+    const urls = result.urls;
+    if (urls.length === 0 && result.notText) urls._reason = 'not-text';
+    return urls;
   } catch (err) {
     if (MX_DEBUG) console.log(`[嗅探][HTTP] ${fullUrl} 失败: ${err.message}`);
-    return [];
+    const empty = [];
+    empty._reason = 'http-error';
+    return empty;
   } finally {
     clearTimeout(timer);
   }
@@ -789,7 +805,9 @@ async function browserSniff(fullUrl, targetUrl, timeout) {
     return [...urls];
   } catch (e) {
     if (MX_DEBUG) console.log(`[嗅探][浏览器] ${fullUrl} 早期异常: ${e.message}`);
-    return [];
+    const empty = [];
+    empty._reason = 'render-error';
+    return empty;
   } finally {
     if (bw && holder) {
       try { await bw.releasePage(holder); } catch (e) { }
@@ -861,11 +879,13 @@ async function runUniversalSniff(targetUrl, options) {
   universalBrowserBudget = Math.max(0, MX_UNIVERSAL_BROWSER_MAX);
   const onProgress = opts.onProgress || (() => {});
   const earlyHits = opts.earlyHits != null ? opts.earlyHits : MX_UNIVERSAL_EARLY_HITS;
+  // 平台感知记忆：提取目标平台 key，排序优先该平台历史成功的 Provider
+  const domain = getDomainKey(targetUrl);
   let providers;
   if (opts.providers) {
     providers = opts.providers;
   } else {
-    const { top, tail } = splitProvidersTopK();
+    const { top, tail } = splitProvidersTopKFor(domain);
     providers = [...top, ...tail];
   }
 
@@ -920,7 +940,13 @@ async function runUniversalSniff(targetUrl, options) {
       validUrls.forEach((u) => allUrls.add(u));
       if (validUrls.length > 0) hitCount++;
       const diff = Date.now() - startTs;
-      recordProviderResult(provider, { ok: validUrls.length > 0, hitCount: validUrls.length, latencyMs: diff });
+      recordProviderResult(provider, {
+        ok: validUrls.length > 0,
+        hitCount: validUrls.length,
+        latencyMs: diff,
+        domain,
+        reason: urls._reason || (validUrls.length > 0 ? 'ok' : 'empty')
+      });
       finishedCount++;
       if (finishedCount % 10 === 0) {
         (async () => { try { saveProviderStats(); } catch (e) { } })();
@@ -941,7 +967,7 @@ async function runUniversalSniff(targetUrl, options) {
       }
     } catch (e) {
       const diff = Date.now() - startTs;
-      recordProviderResult(provider, { ok: false, hitCount: 0, latencyMs: diff });
+      recordProviderResult(provider, { ok: false, hitCount: 0, latencyMs: diff, domain, reason: 'exception' });
       finishedCount++;
       if (finishedCount % 10 === 0) {
         (async () => { try { saveProviderStats(); } catch (e) { } })();
@@ -1001,7 +1027,10 @@ function loadProviderStats() {
         totalLat: item.totalLat || 0,
         lastFailStreak: item.lastFailStreak || 0,
         circuitUntil: item.circuitUntil || 0,
-        lastTs: item.lastTs || 0
+        lastTs: item.lastTs || 0,
+        byDomain: item.byDomain || {},
+        failReasons: item.failReasons || {},
+        lastFailReason: item.lastFailReason || ''
       });
     }
   } catch (e) { }
@@ -1023,10 +1052,12 @@ function recordProviderResult(provider, opts) {
   const latencyMs = (opts && opts.latencyMs) || 0;
   const hitCount = (opts && opts.hitCount) || 0;
   const ok = !!(opts && opts.ok);
+  const domain = (opts && opts.domain) || 'generic';
+  const reason = (opts && opts.reason) || (ok ? 'ok' : 'empty');
 
   let s = providerStats.get(provider);
   if (!s) {
-    s = { ok: 0, fail: 0, hits: 0, totalLat: 0, lastFailStreak: 0, circuitUntil: 0, lastTs: 0 };
+    s = { ok: 0, fail: 0, hits: 0, totalLat: 0, lastFailStreak: 0, circuitUntil: 0, lastTs: 0, byDomain: {}, failReasons: {} };
     providerStats.set(provider, s);
   }
   s.lastTs = Date.now();
@@ -1038,10 +1069,22 @@ function recordProviderResult(provider, opts) {
   } else {
     s.fail++;
     s.lastFailStreak++;
+    // 失败原因记忆（用于分析：超时 / 网络错误 / 未命中 / 渲染失败 等）
+    s.lastFailReason = reason;
+    s.failReasons = s.failReasons || {};
+    s.failReasons[reason] = (s.failReasons[reason] || 0) + 1;
     if (MX_UNIVERSAL_CIRCUIT_BREAK > 0 && s.lastFailStreak >= MX_UNIVERSAL_CIRCUIT_BREAK) {
       s.circuitUntil = Date.now() + Math.max(1, MX_UNIVERSAL_CB_COOLDOWN) * 1000;
     }
   }
+  // 平台记忆：按目标平台域名分桶，供「平台记忆排序」使用
+  if (!s.byDomain) s.byDomain = {};
+  let d = s.byDomain[domain];
+  if (!d) { d = { ok: 0, fail: 0, hits: 0, totalLat: 0, lastFailStreak: 0 }; s.byDomain[domain] = d; }
+  d.lastTs = Date.now();
+  d.totalLat += Math.max(0, latencyMs);
+  if (ok) { d.ok++; d.hits += Math.max(0, hitCount); d.lastFailStreak = 0; }
+  else { d.fail++; d.lastFailStreak++; }
   try { saveProviderStats(); } catch (e) { }
 }
 
@@ -1077,20 +1120,8 @@ function rankedProviders() {
   }
   normal.sort((a, b) => b.score - a.score);
   broken.sort((a, b) => b.score - a.score);
-  const result = [];
-  for (const e of normal) {
-    const strObj = new String(e.p);
-    strObj._rankScore = e.score;
-    strObj._broken = false;
-    result.push(strObj);
-  }
-  for (const e of broken) {
-    const strObj = new String(e.p);
-    strObj._rankScore = e.score;
-    strObj._broken = true;
-    result.push(strObj);
-  }
-  return result;
+  // 返回纯字符串（v2.4.9 修复：new String() 会导致 Map 键身份不一致，记忆/熔断数据无法复用）
+  return [...normal, ...broken].map((e) => e.p);
 }
 
 function splitProvidersTopK() {
@@ -1098,11 +1129,130 @@ function splitProvidersTopK() {
   const ranked = rankedProviders();
   const top = [];
   const tail = [];
+  for (const p of ranked) {
+    if (top.length < k && !isProviderCircuitBroken(p)) top.push(p);
+    else tail.push(p);
+  }
+  return { top, tail };
+}
+
+// ============================================================
+// 6.6 平台感知记忆（v2.4.9 新增）
+//    按目标平台域名记忆 Provider 成功率，排序时优先该平台历史成功 Provider，
+//    分析各 Provider 失败原因并生成规则表 → 提高命中率、保证成功。
+// ============================================================
+const PLATFORM_NAMES = {
+  qq: '腾讯', bili: 'B站', sohu: '搜狐', youku: '优酷', iqiyi: '爱奇艺',
+  mgtv: '芒果TV', douyin: '抖音', m3u8: 'm3u8直链', generic: '其他平台'
+};
+const PLATFORM_KEYS = Object.keys(PLATFORM_NAMES);
+
+// 从目标视频 URL 提取平台 key（识别失败统一归为 generic，不影响排序）
+function getDomainKey(url) {
+  try {
+    const host = new URL(String(url || '')).hostname.toLowerCase().replace(/^www\./, '');
+    if (/(^|\.)v\.qq\.com$/.test(host) || /(^|\.)qq\.com$/.test(host)) return 'qq';
+    if (/(^|\.)bilibili\.com$/.test(host) || /(^|\.)b23\.tv$/.test(host)) return 'bili';
+    if (/(^|\.)sohu\.com$/.test(host)) return 'sohu';
+    if (/(^|\.)youku\.com$/.test(host)) return 'youku';
+    if (/(^|\.)iqiyi\.com$/.test(host)) return 'iqiyi';
+    if (/(^|\.)mgtv\.com$/.test(host)) return 'mgtv';
+    if (/(^|\.)douyin\.com$/.test(host) || /(^|\.)iesdouyin\.com$/.test(host)) return 'douyin';
+    if (/(^|\.)m3u8\.(tv|cc)$/.test(host)) return 'm3u8';
+    return 'generic';
+  } catch (e) { return 'generic'; }
+}
+
+function getDomainStats(s, domain) {
+  if (!s) return null;
+  return (s.byDomain && s.byDomain[domain]) || null;
+}
+
+// 平台感知评分：该平台样本 >=2 时以平台记忆为准（成功率高权重），否则回退全局评分
+function providerScoreFor(provider, domain) {
+  const s = providerStats.get(provider);
+  const globalScore = providerScore(provider);
+  const d = s ? getDomainStats(s, domain) : null;
+  if (d && d.ok + d.fail >= 2) {
+    const total = d.ok + d.fail;
+    const successRate = d.ok / total;
+    const avgLat = total > 0 ? d.totalLat / total : 1000;
+    return successRate * 2000 + d.hits * 50 - avgLat / 30 + globalScore / 1000;
+  }
+  return globalScore;
+}
+
+// 弱项规则：该平台从未成功且失败 >= 阈值 → 排到最后（仍执行，但不再抢占前序）
+function isDomainWeak(provider, domain, threshold) {
+  const d = getDomainStats(providerStats.get(provider), domain);
+  if (!d) return false;
+  return d.ok === 0 && d.fail >= (threshold || 3);
+}
+
+// 按平台记忆排序：成功记忆优先，弱项次之，熔断最后
+function rankedProvidersFor(domain) {
+  const normal = [];
+  const weak = [];
+  const broken = [];
+  for (const p of PROVIDERS) {
+    const score = providerScoreFor(p, domain);
+    const b = isProviderCircuitBroken(p);
+    const w = isDomainWeak(p, domain, 3);
+    if (b) broken.push({ p, score });
+    else if (w) weak.push({ p, score });
+    else normal.push({ p, score });
+  }
+  const byScore = (a, b) => b.score - a.score;
+  normal.sort(byScore);
+  weak.sort(byScore);
+  broken.sort(byScore);
+  // 返回纯字符串（v2.4.9 修复：new String() 会导致 Map 键身份不一致，记忆数据无法复用）
+  return [...normal, ...weak, ...broken].map((e) => e.p);
+}
+
+// 平台感知 TopK：TopK 先跑（该平台历史最可能成功的 Provider），其余补跑
+function splitProvidersTopKFor(domain) {
+  const k = Math.max(1, MX_UNIVERSAL_TOPK_FIRST || 10);
+  const ranked = rankedProvidersFor(domain);
+  const top = [];
+  const tail = [];
   for (const entry of ranked) {
-    if (top.length < k && !entry._broken) top.push(entry);
+    if (top.length < k) top.push(entry);
     else tail.push(entry);
   }
   return { top, tail };
+}
+
+// 生成规则表（分析接口用）：每个平台 Provider 的记忆排序 + 推荐/备用/弱项/熔断 + 失败原因
+function buildPlatformRules() {
+  const rules = {};
+  for (const domain of PLATFORM_KEYS) {
+    const list = rankedProvidersFor(domain).map((p) => {
+      const s = providerStats.get(p) || {};
+      const d = getDomainStats(s, domain);
+      let level = 'backup';
+      if (d && d.ok > 0) level = 'recommended';
+      if (isProviderCircuitBroken(p)) level = 'broken';
+      else if (d && d.ok === 0 && d.fail >= 3) level = 'weak';
+      return {
+        provider: String(p),
+        level,
+        platformOk: d ? d.ok : 0,
+        platformFail: d ? d.fail : 0,
+        globalOk: s.ok || 0,
+        globalFail: s.fail || 0,
+        score: Math.round(providerScoreFor(p, domain)),
+        lastFailReason: s.lastFailReason || '',
+        failReasons: s.failReasons || {}
+      };
+    });
+    rules[domain] = {
+      name: PLATFORM_NAMES[domain],
+      recommended: list.filter((x) => x.level === 'recommended').length,
+      list
+    };
+  }
+  return rules;
 }
 
 try { loadProviderStats(); } catch (e) { }
@@ -1848,7 +1998,7 @@ app.get('/sniff', async (req, res) => {
     return res.json({ code: 400, msg: '链接格式不正确' });
   }
 
-  const cacheKey = 'universal:' + videoUrl;
+  const cacheKey = 'universal:' + videoUrl + (req.query.official === '0' || req.query.official === 'false' ? '&official=0' : '');
   const cached = !refresh ? universalCache.get(cacheKey) : null;
   if (cached) {
     if (detailed) {
@@ -1862,7 +2012,9 @@ app.get('/sniff', async (req, res) => {
 
   try {
     // 官方视频平台专用解析（腾讯/B站/搜狐直连官方接口），命中则直接返回（不占用 Provider 并发）
-    const official = await officialVideoResolve(videoUrl);
+    // official=0 时跳过官方直连，强制跑全部 Provider（用于失败原因分析 / 调试第三方接口）
+    const skipOfficial = req.query.official === '0' || req.query.official === 'false';
+    const official = skipOfficial ? null : await officialVideoResolve(videoUrl);
     if (official && official.urls.length > 0) {
       const oSniff = { urls: official.urls, hitProviders: 1, totalProviders: 1, durationMs: 0, source: official.source };
       universalCache.set(cacheKey, oSniff);
@@ -2349,6 +2501,7 @@ function startSniff() {
   document.getElementById('stopBtn').disabled = false;
   log('开始嗅探: ' + url, 'info');
   log('Provider 数量: ${PROVIDERS.length} · 并发: ${MX_UNIVERSAL_CONCURRENCY} · 提前命中: ${MX_UNIVERSAL_EARLY_HITS > 0 ? MX_UNIVERSAL_EARLY_HITS : '全部'}', 'info');
+  log('平台记忆: 已启用（按目标平台历史成功 Provider 优先排序，失败原因自动记忆）', 'info');
 
   const urlParams = new URLSearchParams();
   urlParams.set('url', url);
@@ -2528,6 +2681,19 @@ app.get('/admin/api/providers', adminAuth, (req, res) => {
 });
 
 // ============================================================
+// 15.5 /admin/api/rules —— 平台记忆规则与失败原因分析（v2.4.9）
+//      查看每个平台 Provider 的记忆排序、推荐/备用/弱项/熔断状态、失败原因分布
+// ============================================================
+app.get('/admin/api/rules', adminAuth, (req, res) => {
+  res.json({
+    code: 200,
+    platforms: PLATFORM_NAMES,
+    rules: buildPlatformRules(),
+    globalTop5: rankedProviders().slice(0, 5).map((p) => ({ provider: String(p), score: Math.round(providerScore(p)) }))
+  });
+});
+
+// ============================================================
 // 16. /admin/api/sniff-stream SSE
 // ============================================================
 app.get('/admin/api/sniff-stream', adminAuth, async (req, res) => {
@@ -2565,7 +2731,9 @@ app.get('/admin/api/sniff-stream', adminAuth, async (req, res) => {
   try {
     // 官方视频平台专用解析（腾讯/B站/搜狐直连官方接口），命中则直接返回，不再依赖第三方接口
     // （v2.4.9：修复测试页对腾讯等官方平台链接大量「未命中」的问题）
-    const official = await officialVideoResolve(videoUrl);
+    // official=0 时跳过官方直连，强制跑全部 Provider（用于失败原因分析 / 调试第三方接口）
+    const skipOfficial = req.query.official === '0' || req.query.official === 'false';
+    const official = skipOfficial ? null : await officialVideoResolve(videoUrl);
     if (official && official.urls.length > 0) {
       if (!clientClosed) {
         sendEvent('progress', {
@@ -2790,6 +2958,7 @@ function listenWithRetry(port, retries) {
     console.log(`║  Flush 周期:  ${String(MX_CACHE_FLUSH_INTERVAL + 's').padEnd(36)}║`);
     console.log(`║  熔断 Provider: ${String(PROVIDERS.filter(isProviderCircuitBroken).length + '/' + PROVIDERS.length).padEnd(36)}║`);
     console.log(`║  TopK 优先:    ${String(MX_UNIVERSAL_TOPK_FIRST + ' / 渲染并发 ' + MX_UNIVERSAL_BROWSER_CONC).padEnd(36)}║`);
+    console.log(`║  平台记忆:    ${String('已启用（按平台成功率排序）').padEnd(36)}║`);
     console.log('╠══════════════════════════════════════════════════════════════╣');
     console.log(`║  Chrome 路径: ${String(checkChrome() || '使用系统默认').padEnd(36)}║`);
     console.log(`║  当前版本:     v${String(ver).padEnd(36)}║`);

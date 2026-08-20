@@ -19,10 +19,16 @@
 - 🐛 修复部署配置仍强制「提前命中 3」导致 Provider 被跳过
   - 根因：代码默认 `MX_UNIVERSAL_EARLY_HITS=0` 已关闭提前命中，但 `ecosystem.config.js`（PM2）、`super-sniffer.service`（systemd）、`deploy/env.example.sh` 仍写死 `=3`，按这些方式部署时依旧命中 3 家就 skip 剩余 15 家
   - 修复：三处部署配置全部改为 `MX_UNIVERSAL_EARLY_HITS=0`，保证 18 家 Provider 全部执行
+- 🐛 修复平台记忆/失败原因「记不住」：`rankedProviders` / `rankedProvidersFor` 曾用 `new String(...)` 包装 Provider
+  - 根因：`new String()` 是对象，`Map.get/set` 按引用比较，导致每次请求都生成新的键，`providerStats` 里 `byDomain` / `failReasons` 记忆与熔断状态永远匹配不到旧数据，`provider-score.json` 不断累积重复条目
+  - 修复：排序函数改为返回纯字符串；`/admin/api/rules` 的 `globalTop5` 改用 `providerScore(p)` 计算，删除 `_rankScore`/`_broken` 依赖 → 平台记忆、失败原因、熔断跨请求正确复用，统计文件无重复
+- ✨ `/sniff` 与 `/admin/api/sniff-stream` 新增 `official=0` 参数：跳过官方直连、强制跑全部 18 家 Provider，用于失败原因分析与第三方接口调试（腾讯等官方平台解析始终优先，默认不受影响）
 
 ### 验证
-- 官方解析优先：腾讯 m.v.qq.com 链接 → `qq-official` 命中 **4 个 mp4 直链**，日志显示 `count: 4`（不再是「命中 0 个 URL」）
+- 官方解析优先：腾讯 m.v.qq.com 链接 → `qq-official` 命中 **4 个 mp4 直链**，SSE `count: 4`（不再是「命中 0 个 URL」）
 - 全部 Provider 执行：HLS 测试流 18/18 全部执行，**0 跳过**，命中 7 家（此前命中 3 家即提前返回）
+- 失败原因分析：`official=0` 强制跑 18 家，`provider-score.json` 记录 **18 条无重复**，腾讯链接 15 家 `no-match`（接口不支持腾讯移动端）+ 3 家 `http-error`（网络错误），`/admin/api/rules` 平台记忆与失败原因分布正常展示
+- 平台记忆持久化：重启后 `byDomain` / `failReasons` 从 `provider-score.json` 正确加载，按平台成功率排序生效
 
 ## [2.4.8] - 2026-08-19
 

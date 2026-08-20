@@ -45,6 +45,9 @@
   - 🐛 修复嗅探日志「✅ 命中 0 个 URL」显示错误：SSE `progress` 事件补充 `urls` 字段，前端改用 `data.count ?? urls.length` 显示真实命中数量
   - 🎬 嗅探测试页（`/admin/api/sniff-stream`）与 `/sniff` 官方解析优先：腾讯 / B站 / 搜狐直连官方接口，命中即直接返回，不再依赖第三方接口 → 官方平台链接不再大量「未命中」
   - 🔧 部署配置（PM2 `ecosystem.config.js` / systemd `super-sniffer.service` / `deploy/env.example.sh`）的 `MX_UNIVERSAL_EARLY_HITS` 统一改为 **0**，保证 18 家 Provider 全部执行（此前三处仍写死 3，命中 3 家就 skip 剩余 15 家）
+  - 🐛 修复平台记忆 / 失败原因「记不住」：排序函数不再用 `new String()` 包装 Provider（Map 键身份不一致导致 `byDomain` / `failReasons` 记忆与熔断跨请求失效、统计文件重复累积），平台记忆排序、失败原因分析与熔断现在跨请求正确持久化
+  - 🔍 `/sniff` 与 `/admin/api/sniff-stream` 新增 `official=0` 参数：跳过官方直连、强制跑全部 18 家 Provider，便于失败原因分析 / 第三方接口调试（腾讯等官方平台默认仍官方优先）
+  - 📊 失败原因自动归类（`no-match` / `http-error` / `not-text` / `timeout` / `render-error` 等）并写入 `.mx_cache/provider-score.json`，`/admin/api/rules` 展示各平台推荐/备用/弱项/熔断 Provider 与失败原因分布
 - **v2.4.7 新增**：
   - 🐛 修复 `url` 参数未做 URL 编码时目标视频 URL 里的 `&` 被拆成独立参数导致参数丢失（如 `?url=...play?cid=xxx&vid=yyy` 的 `vid` 被拆走 → 腾讯解析缺 vid 返回 404）
   - 🔧 新增 `resolveVideoUrl`：自动把散落的、不属于服务自身参数（url/detailed/refresh/providers）的 query 参数合并回 url 查询串，恢复完整视频地址（腾讯 / 搜狐 / 爱奇艺等带 `&` 的平台链接同样受益）
