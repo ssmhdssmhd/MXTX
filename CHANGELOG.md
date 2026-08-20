@@ -5,6 +5,22 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.6.3] - 2026-08-20
+
+### 修复后台误报「服务离线」与「检查更新失败」
+
+### Fixed
+- 🐛 修复后台页面误报「服务离线 / 无法连接后台服务」：`loadStatus()` 引用了 HTML 中**不存在的元素** `stPort`/`stChrome`/`stVersion`，设置 `textContent` 时抛「Cannot set properties of null」，被 catch 后误把正常运行的服务标记为「服务离线」
+- 🐛 修复「检查更新失败: Cannot read properties of null」：`checkUpdate()` 读取不存在的 `stChrome.textContent` 抛空引用（该变量本就未使用，纯死代码）
+
+### Changed
+- 🛡️ 新增空安全 `setText(id, text)` 助手：元素缺失时静默跳过，不再让单个元素问题拖垮整页渲染
+- 🧹 仪表盘渲染 `renderDashboard()` / 状态加载 `loadStatus()` / 更新检查 `checkUpdate()` 全部改为空安全写入；端口已在顶部 `stService` 显示、版本由 `versionBadge` 显示、Chrome 状态由监控卡展示，不再依赖缺失元素
+
+### 验证
+- 内联脚本 `node --check` 语法通过
+- 浏览器实测：后台显示「服务运行中」、顶部显示 端口 1314 / v2.6.x / 运行时长，控制台**无任何空引用报错**
+
 ## [2.6.2] - 2026-08-20
 
 ### 修复「更新后依赖缺失导致服务起不来」

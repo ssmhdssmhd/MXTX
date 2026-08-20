@@ -433,6 +433,13 @@
 // ========== 通用工具 ==========
 function abs(path) { return location.origin + path; }
 
+// 空安全 textContent 写入：元素不存在时静默跳过，
+// 避免单个元素缺失导致整页渲染抛错误报「服务离线」
+function setText(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+
 let updating = false;
 let latestRelease = null;
 let startTime = Date.now();
@@ -523,30 +530,33 @@ function renderDashboard(data) {
   const freePct = mem.totalMB ? Math.round(((mem.freeMB || 0) / mem.totalMB) * 100) : 0;
 
   // KPI
-  document.getElementById('kpiBrowser').textContent = (data.browserPool ?? '?') + ' 个';
-  document.getElementById('kpiBrowserSub').textContent = `Page 复用池 ${data.pagePoolTotal ?? '?'} 页`;
-  document.getElementById('kpiPage').textContent = (data.pagePoolBusy ?? '?') + ' / ' + (data.pagePoolTotal ?? '?');
+  setText('kpiBrowser', (data.browserPool ?? '?') + ' 个');
+  setText('kpiBrowserSub', `Page 复用池 ${data.pagePoolTotal ?? '?'} 页`);
+  setText('kpiPage', (data.pagePoolBusy ?? '?') + ' / ' + (data.pagePoolTotal ?? '?'));
   const pagePct = data.pagePoolTotal ? Math.round(((data.pagePoolBusy || 0) / data.pagePoolTotal) * 100) : 0;
-  document.getElementById('kpiPageSub').textContent = '占用率 ' + pagePct + '%';
-  document.getElementById('kpiProvider').textContent = (data.providers ?? '?') + ' 个';
+  setText('kpiPageSub', '占用率 ' + pagePct + '%');
+  setText('kpiProvider', (data.providers ?? '?') + ' 个');
   const broken = (data.universal && data.universal.circuitBroken) || 0;
-  document.getElementById('kpiProviderSub').textContent = '熔断 ' + broken + ' 个';
+  setText('kpiProviderSub', '熔断 ' + broken + ' 个');
   const cache = data.cache || {};
   const cacheTotal = (cache.parse || 0) + (cache.universal || 0);
-  document.getElementById('kpiCache').textContent = cacheTotal + ' 条';
-  document.getElementById('kpiCacheParse').textContent = cache.parse ?? '?';
-  document.getElementById('kpiCacheUni').textContent = cache.universal ?? '?';
+  setText('kpiCache', cacheTotal + ' 条');
+  setText('kpiCacheParse', cache.parse ?? '?');
+  setText('kpiCacheUni', cache.universal ?? '?');
 
   // 系统资源
   const memBar = document.getElementById('memBar');
-  memBar.style.width = memPct + '%';
-  memBar.className = 'fill-' + (memPct > 85 ? 'red' : memPct > 60 ? 'orange' : 'blue');
-  document.getElementById('memVal').textContent = used.toLocaleString() + ' / ' + (mem.totalMB || 0).toLocaleString() + ' MB';
-  document.getElementById('freeBar').style.width = freePct + '%';
-  document.getElementById('freeVal').textContent = freePct + '%';
-  const poolPct = data.browserPool ? Math.round((data.browserPool / Math.max(data.browserPool, 1)) * 100) : 0;
-  document.getElementById('poolBar').style.width = (data.browserPool > 0 ? 100 : 0) + '%';
-  document.getElementById('poolVal').textContent = (data.browserPool ?? '?') + ' / ' + (data.browserPool ?? '?') + ' 在线';
+  if (memBar) {
+    memBar.style.width = memPct + '%';
+    memBar.className = 'fill-' + (memPct > 85 ? 'red' : memPct > 60 ? 'orange' : 'blue');
+  }
+  setText('memVal', used.toLocaleString() + ' / ' + (mem.totalMB || 0).toLocaleString() + ' MB');
+  const freeBar = document.getElementById('freeBar');
+  if (freeBar) freeBar.style.width = freePct + '%';
+  setText('freeVal', freePct + '%');
+  const poolBar = document.getElementById('poolBar');
+  if (poolBar) poolBar.style.width = (data.browserPool > 0 ? 100 : 0) + '%';
+  setText('poolVal', (data.browserPool ?? '?') + ' / ' + (data.browserPool ?? '?') + ' 在线');
   setBadge(document.getElementById('memBadge'),
     memPct > 85 ? '内存紧张' : memPct > 60 ? '占用偏高' : '运行良好',
     memPct > 85 ? 'offline' : memPct > 60 ? 'warn' : 'online');
@@ -559,6 +569,7 @@ function renderDashboard(data) {
   // Top5 榜单
   const top = (data.providerStats && data.providerStats.rankedTop5) || [];
   const rank = document.getElementById('rankList');
+  if (!rank) return;
   if (top.length === 0) {
     rank.innerHTML = '<div style="color:var(--text-dim);font-size:13px;">暂无评分数据，跑一次嗅探后生成。</div>';
   } else {
@@ -581,19 +592,18 @@ function renderDashboard(data) {
 
   // 万能嗅探配置
   const u = data.universal || {};
-  document.getElementById('cfgProviders').textContent = (u.providers ?? '?') + ' 个';
-  document.getElementById('cfgConcurrency').textContent = u.concurrency ?? '?';
-  document.getElementById('cfgEarlyHits').textContent =
-    u.earlyHits === 0 ? '全部执行' : (u.earlyHits + ' 家');
-  document.getElementById('cfgCacheSize').textContent = (u.cacheSize ?? '?') + ' 条';
-  document.getElementById('cfgBroken').textContent = (u.circuitBroken ?? 0) + ' 个';
+  setText('cfgProviders', (u.providers ?? '?') + ' 个');
+  setText('cfgConcurrency', u.concurrency ?? '?');
+  setText('cfgEarlyHits', u.earlyHits === 0 ? '全部执行' : (u.earlyHits + ' 家'));
+  setText('cfgCacheSize', (u.cacheSize ?? '?') + ' 条');
+  setText('cfgBroken', (u.circuitBroken ?? 0) + ' 个');
 
   // 缓存详情 & 其他
-  document.getElementById('cacheParse').textContent = (cache.parse ?? '?') + ' 条';
-  document.getElementById('cacheUni').textContent = (cache.universal ?? '?') + ' 条';
-  document.getElementById('cfgPort').textContent = data.port ?? '?';
-  document.getElementById('cfgChrome').textContent = (data.chromeInstalled ? '✅ ' : '❌ ') + (data.chromeVersion || '未知');
-  document.getElementById('cfgSource').textContent = (data.sourceLabel || '-') + ' · ' + (data.branch || '-');
+  setText('cacheParse', (cache.parse ?? '?') + ' 条');
+  setText('cacheUni', (cache.universal ?? '?') + ' 条');
+  setText('cfgPort', data.port ?? '?');
+  setText('cfgChrome', (data.chromeInstalled ? '✅ ' : '❌ ') + (data.chromeVersion || '未知'));
+  setText('cfgSource', (data.sourceLabel || '-') + ' · ' + (data.branch || '-'));
 }
 
 function safeHost(u) {
@@ -639,15 +649,14 @@ async function loadStatus() {
   try {
     const res = await fetch(abs('/admin/api/status'));
     const data = await res.json();
-    document.getElementById('stService').textContent = data.service + ' · 端口 ' + data.port;
-    document.getElementById('stPort').textContent = data.port;
-    document.getElementById('stChrome').textContent = data.chromeVersion;
-    document.getElementById('stVersion').textContent = 'v' + data.version;
-    document.getElementById('versionBadge').textContent = 'v' + data.version;
-    document.getElementById('footerVersion').textContent = 'v' + data.version;
+    // 端口已包含在 stService 中，版本由 versionBadge 显示，Chrome 状态在下方监控卡展示，
+    // 不再写入不存在的 stPort/stChrome/stVersion 元素（曾导致空引用误报「服务离线」）
+    setText('stService', data.service + ' · 端口 ' + data.port);
+    setText('versionBadge', 'v' + data.version);
+    setText('footerVersion', 'v' + data.version);
     setBadge(document.getElementById('serviceBadge'), data.service === '运行中' ? '服务运行中' : '服务异常', data.service === '运行中' ? 'online' : 'offline');
-    document.getElementById('browserCurrent').textContent = data.chromeVersion;
-    document.getElementById('sourceCurrent').textContent = 'v' + data.version;
+    setText('browserCurrent', data.chromeVersion);
+    setText('sourceCurrent', 'v' + data.version);
     if (data.source) renderSource(data.source);
     renderDashboard(data);
   } catch (e) {
@@ -665,15 +674,16 @@ async function checkUpdate() {
     latestRelease = data;
     const latestVer = data.latestVersionBase || String(data.latestVersion || '').split('-')[0];
     const branchLabel = data.branch ? `（${data.branch} 分支）` : '';
-    document.getElementById('sourceLatest').textContent = 'v' + latestVer + branchLabel;
     const srcNeed = data.sourceNeedUpdate;
     setBadge(document.getElementById('sourceUpdateBadge'), srcNeed ? '有新版本' : '已是最新', srcNeed ? 'online' : '');
-    document.getElementById('sourceLatest').className = 'version-value ' + (srcNeed ? 'new' : 'current');
-    const chromeNow = document.getElementById('stChrome').textContent;
-    document.getElementById('browserLatest').textContent = data.browserAsset ? data.browserAsset.name : '无浏览器包';
+    setText('sourceLatest', 'v' + latestVer + branchLabel);
+    const latestEl = document.getElementById('sourceLatest');
+    if (latestEl) latestEl.className = 'version-value ' + (srcNeed ? 'new' : 'current');
+    setText('browserLatest', data.browserAsset ? data.browserAsset.name : '无浏览器包');
     const brNeed = data.browserNeedUpdate;
     setBadge(document.getElementById('browserUpdateBadge'), brNeed ? '可更新' : '已是最新', brNeed ? 'online' : '');
-    document.getElementById('browserLatest').className = 'version-value ' + (brNeed ? 'new' : 'current');
+    const brEl = document.getElementById('browserLatest');
+    if (brEl) brEl.className = 'version-value ' + (brNeed ? 'new' : 'current');
     log(`检查完成：${data.sourceLabel || ''}最新版本 v${latestVer}${branchLabel}，源码${srcNeed ? '有更新' : '已最新'}，浏览器${brNeed ? '有更新' : '已最新'}`, 'ok');
   } catch (e) { log('检查更新失败: ' + e.message, 'err'); }
 }
