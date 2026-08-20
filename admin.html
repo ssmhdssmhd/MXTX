@@ -17,260 +17,367 @@
     --success: #22c55e;
     --warning: #f59e0b;
     --danger: #ef4444;
-    --radius: 12px;
+    --violet: #8b5cf6;
+    --cyan: #22d3ee;
+    --radius: 14px;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
       "Microsoft YaHei", sans-serif;
-    background: var(--bg);
+    background:
+      radial-gradient(1200px 500px at 10% -10%, rgba(139,92,246,.18), transparent 60%),
+      radial-gradient(1000px 400px at 110% 0%, rgba(34,211,238,.12), transparent 55%),
+      var(--bg);
     color: var(--text);
     min-height: 100vh;
     padding: 24px;
   }
-  .container { max-width: 960px; margin: 0 auto; }
-  .header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 24px;
-    flex-wrap: wrap;
-    gap: 12px;
+  .container { max-width: 1080px; margin: 0 auto; }
+
+  /* 顶部横幅 */
+  .hero {
+    position: relative;
+    overflow: hidden;
+    background: linear-gradient(135deg, rgba(59,130,246,.28), rgba(139,92,246,.22), rgba(34,211,238,.18));
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px 28px;
+    margin-bottom: 20px;
   }
-  .header h1 {
-    font-size: 22px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
+  .hero::after {
+    content: '';
+    position: absolute; inset: 0;
+    background: radial-gradient(600px 200px at 85% -20%, rgba(255,255,255,.08), transparent 70%);
+    pointer-events: none;
+  }
+  .hero-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .hero h1 {
+    font-size: 24px;
+    display: flex; align-items: center; gap: 12px;
   }
   .logo {
-    width: 36px; height: 36px;
+    width: 44px; height: 44px;
     background: linear-gradient(135deg, #3b82f6, #8b5cf6);
-    border-radius: 10px;
+    border-radius: 12px;
     display: flex; align-items: center; justify-content: center;
-    font-size: 18px;
+    font-size: 22px;
+    box-shadow: 0 6px 20px rgba(59,130,246,.4);
   }
+  .hero-desc { margin-top: 12px; color: rgba(226,232,240,.85); font-size: 13px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display:inline-block; margin-right:6px; }
+
   .badge {
     padding: 4px 12px;
     border-radius: 999px;
     font-size: 12px;
     font-weight: 600;
-    background: var(--card);
+    background: rgba(30,41,59,.72);
     border: 1px solid var(--border);
     color: var(--text-dim);
+    white-space: nowrap;
   }
   .badge.online { color: var(--success); border-color: rgba(34,197,94,.4); }
   .badge.offline { color: var(--danger); border-color: rgba(239,68,68,.4); }
+  .badge.warn { color: var(--warning); border-color: rgba(245,158,11,.4); }
 
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+  .nav-links { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .nav-link {
+    padding: 8px 14px; border-radius: 8px;
+    font-size: 13px; font-weight: 600; text-decoration: none; color: #fff;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .nav-link.primary { background: linear-gradient(135deg,#a855f7,#6366f1); }
+  .nav-link.outline { background: rgba(30,41,59,.5); border: 1px solid var(--border); color: var(--text); }
 
+  /* 通用卡片 */
   .card {
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 20px;
-    transition: background .2s;
+    transition: background .2s, transform .15s;
   }
   .card:hover { background: var(--card-hover); }
   .card-title {
-    font-size: 14px;
+    font-size: 13px;
     color: var(--text-dim);
-    margin-bottom: 12px;
+    margin-bottom: 14px;
     display: flex;
     align-items: center;
     justify-content: space-between;
+    letter-spacing: .3px;
+    text-transform: uppercase;
+    font-weight: 700;
   }
-  .card-title .icon { font-size: 16px; }
-  .version-row {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    margin-bottom: 8px;
+  .card-title .icon { font-size: 15px; margin-right: 6px; }
+
+  .section-title {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 15px; font-weight: 700; color: var(--text);
+    margin: 26px 0 14px;
   }
-  .version-label { font-size: 13px; color: var(--text-dim); }
-  .version-value { font-size: 18px; font-weight: 700; }
+  .section-title .line { flex:1; height:1px; background: var(--border); }
+
+  /* KPI 指标卡 */
+  .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
+  @media (max-width: 900px) { .kpi-grid { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 520px) { .kpi-grid { grid-template-columns: 1fr; } }
+  .kpi {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px 18px; position: relative; overflow: hidden;
+    transition: transform .15s, border-color .2s;
+  }
+  .kpi:hover { transform: translateY(-2px); border-color: var(--primary); }
+  .kpi .kpi-ico { font-size: 20px; margin-bottom: 10px; }
+  .kpi .kpi-label { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+  .kpi .kpi-value { font-size: 22px; font-weight: 700; display:flex; align-items:baseline; gap:6px; }
+  .kpi .kpi-sub { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+  .kpi.accent-blue .kpi-ico{color:var(--primary);} .kpi.accent-violet .kpi-ico{color:var(--violet);}
+  .kpi.accent-cyan .kpi-ico{color:var(--cyan);} .kpi.accent-green .kpi-ico{color:var(--success);}
+
+  .grid2 { display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .grid2-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  @media (max-width: 800px) { .grid2, .grid2-3 { grid-template-columns: 1fr; } }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+
+  /* 进度条 */
+  .meter { height: 10px; background: rgba(255,255,255,.08); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .meter > span { display:block; height:100%; border-radius:6px; transition: width .4s ease; }
+  .meter .fill-blue { background: linear-gradient(90deg,#6366f1,#8b5cf6); }
+  .meter .fill-green { background: linear-gradient(90deg,#16a34a,#22c55e); }
+  .meter .fill-orange { background: linear-gradient(90deg,#d97706,#f59e0b); }
+  .meter .fill-red { background: linear-gradient(90deg,#dc2626,#ef4444); }
+  .meter-row { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+  .meter-row .meter { flex:1; }
+  .meter-row .m-label { font-size: 12px; color: var(--text-dim); width: 90px; }
+  .meter-row .m-val { font-size: 12px; font-weight:600; min-width:64px; text-align:right; font-variant-numeric: tabular-nums; }
+
+  /* 走势图 */
+  canvas { width: 100%; height: 64px; display:block; margin-top: 6px; }
+
+  /* 榜单 */
+  .rank { display: flex; flex-direction: column; gap: 10px; }
+  .rank-item {
+    display:flex; align-items:center; gap: 12px;
+    background: rgba(15,23,42,.4); border:1px solid var(--border); border-radius:10px; padding: 10px 12px;
+  }
+  .rank-medal {
+    width: 26px; height: 26px; border-radius: 8px; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700;
+  }
+  .rank-medal.gold{ background:rgba(245,158,11,.18); color:#fbbf24; }
+  .rank-medal.silver{ background:rgba(148,163,184,.18); color:#cbd5e1; }
+  .rank-medal.bronze{ background:rgba(180,83,9,.18); color:#f59e0b; }
+  .rank-medal.plain{ background:rgba(59,130,246,.15); color:#93c5fd; }
+  .rank-host { flex:1; font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .rank-score { font-size:12px; color:var(--text-dim); }
+  .rank-bar { width:60px; height:6px; background:rgba(255,255,255,.08); border-radius:4px; overflow:hidden; }
+  .rank-bar > span { display:block; height:100%; background:linear-gradient(90deg,#3b82f6,#8b5cf6); border-radius:4px; }
+  .broked-badge { font-size:11px; color:#fca5a5; background:rgba(239,68,68,.15); border:1px solid rgba(239,68,68,.3); padding:2px 8px; border-radius:999px; }
+
+  /* 键值行 */
+  .kv { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px dashed rgba(51,65,85,.5); font-size:13px; }
+  .kv:last-child{border-bottom:none;}
+  .kv .k { color:var(--text-dim); }
+  .kv .v { font-weight:600; }
+
+  /* 快捷测试 */
+  .test-form { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+  .test-form input {
+    flex:1; min-width:240px;
+    background: #0b1220; border:1px solid var(--border); border-radius:8px;
+    color: var(--text); padding:10px 12px; font-size:13px; outline:none;
+  }
+  .test-form input:focus { border-color: var(--primary); }
+  .test-result {
+    background:#0b1220; border:1px solid var(--border); border-radius:10px;
+    padding:12px; font-family:"SF Mono",Consolas,monospace; font-size:12px;
+    max-height:200px; overflow:auto; white-space:pre-wrap; word-break:break-all;
+    min-height:60px; color:var(--text);
+  }
+  .test-result .ok{color:var(--success);} .test-result .err{color:var(--danger);} .test-result .dim{color:var(--text-dim);}
+
+  .version-row { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:8px; }
+  .version-label { font-size:13px; color:var(--text-dim); }
+  .version-value { font-size:18px; font-weight:700; }
   .version-value.new { color: var(--success); }
   .version-value.old { color: var(--warning); }
   .version-value.current { color: var(--text); }
-  .desc { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+  .desc { font-size:12px; color:var(--text-dim); margin-top:4px; }
 
   .btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    padding: 10px 18px;
-    border: none;
-    border-radius: 8px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all .2s;
-    color: #fff;
+    display:inline-flex; align-items:center; justify-content:center; gap:6px;
+    padding:10px 18px; border:none; border-radius:9px; font-size:14px; font-weight:600;
+    cursor:pointer; transition: all .2s; color:#fff;
   }
-  .btn:disabled { opacity: .5; cursor: not-allowed; }
-  .btn-primary { background: var(--primary); }
-  .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
-  .btn-success { background: var(--success); }
-  .btn-success:hover:not(:disabled) { background: #16a34a; }
-  .btn-outline {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text);
-  }
-  .btn-outline:hover:not(:disabled) { background: var(--card-hover); }
-  .btn-block { width: 100%; margin-top: 14px; }
-  .btn-lg { padding: 14px 20px; font-size: 15px; }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+  .btn-primary { background:var(--primary); } .btn-primary:hover:not(:disabled){background:var(--primary-hover);}
+  .btn-success { background:var(--success); } .btn-success:hover:not(:disabled){background:#16a34a;}
+  .btn-violet { background:linear-gradient(135deg,#8b5cf6,#6366f1); } .btn-violet:hover:not(:disabled){filter:brightness(1.1);}
+  .btn-outline { background:transparent; border:1px solid var(--border); color:var(--text); }
+  .btn-outline:hover:not(:disabled){ background:var(--card-hover); }
+  .btn-block { width:100%; margin-top:14px; }
+  .btn-lg { padding:14px 20px; font-size:15px; }
 
-  .status-bar {
-    display: flex;
-    gap: 16px;
-    margin-bottom: 16px;
-    flex-wrap: wrap;
-  }
-  .status-item {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 14px 20px;
-    flex: 1;
-    min-width: 150px;
-  }
-  .status-item .label { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
-  .status-item .value { font-size: 15px; font-weight: 600; }
+  .status-bar { display:flex; gap:16px; margin-bottom:16px; flex-wrap:wrap; }
+  .status-item { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:14px 20px; flex:1; min-width:150px; }
+  .status-item .label { font-size:12px; color:var(--text-dim); margin-bottom:4px; }
+  .status-item .value { font-size:15px; font-weight:600; }
 
-  .source-card { margin-bottom: 16px; }
-  .source-desc { font-size: 13px; color: var(--text-dim); margin-bottom: 12px; }
-  .source-btns { display: flex; gap: 12px; flex-wrap: wrap; }
-  .source-btn {
-    flex: 1;
-    min-width: 200px;
-    flex-direction: column;
-    gap: 4px;
-    padding: 14px 18px;
-    font-size: 14px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--card);
-    color: var(--text);
-    cursor: pointer;
-    transition: all .2s;
-  }
-  .source-btn:hover { background: var(--card-hover); border-color: var(--primary); }
-  .source-btn.active {
-    background: rgba(59,130,246,.15);
-    border-color: var(--primary);
-    color: var(--primary);
-  }
-  .source-btn.active .source-branch { color: var(--primary); }
-  .source-btn .source-branch {
-    font-size: 11px;
-    color: var(--text-dim);
-    font-weight: 400;
-  }
+  .source-card {}
+  .source-desc { font-size:13px; color:var(--text-dim); margin-bottom:12px; }
+  .source-btns { display:flex; gap:12px; flex-wrap:wrap; }
+  .source-btn { flex:1; min-width:200px; flex-direction:column; gap:4px; padding:14px 18px; font-size:14px; border:1px solid var(--border); border-radius:10px; background:var(--card); color:var(--text); cursor:pointer; transition: all .2s; }
+  .source-btn:hover{ background:var(--card-hover); border-color:var(--primary); }
+  .source-btn.active{ background:rgba(59,130,246,.15); border-color:var(--primary); color:var(--primary); }
+  .source-btn.active .source-branch{ color:var(--primary); }
+  .source-btn .source-branch{ font-size:11px; color:var(--text-dim); font-weight:400; }
 
   .log-box {
-    margin-top: 16px;
-    background: #0b1220;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 14px;
-    max-height: 280px;
-    overflow-y: auto;
-    font-family: "SF Mono", Consolas, monospace;
-    font-size: 12px;
-    line-height: 1.8;
-    white-space: pre-wrap;
-    word-break: break-all;
+    margin-top:16px; background:#0b1220; border:1px solid var(--border); border-radius:var(--radius);
+    padding:14px; max-height:280px; overflow-y:auto; font-family:"SF Mono",Consolas,monospace;
+    font-size:12px; line-height:1.8; white-space:pre-wrap; word-break:break-all;
   }
-  .log-box .log-time { color: var(--text-dim); }
-  .log-box .log-ok { color: var(--success); }
-  .log-box .log-err { color: var(--danger); }
-  .log-box .log-info { color: var(--text); }
-  .log-box .log-warn { color: var(--warning); }
+  .log-box .log-time{color:var(--text-dim);} .log-box .log-ok{color:var(--success);}
+  .log-box .log-err{color:var(--danger);} .log-box .log-info{color:var(--text);} .log-box .log-warn{color:var(--warning);}
 
-  .updating { pointer-events: none; opacity: .6; }
-  .spinner {
-    display: inline-block;
-    width: 14px; height: 14px;
-    border: 2px solid rgba(255,255,255,.3);
-    border-top-color: #fff;
-    border-radius: 50%;
-    animation: spin .8s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
+  .updating{ pointer-events:none; opacity:.6; }
+  .spinner{ display:inline-block; width:14px; height:14px; border:2px solid rgba(255,255,255,.3); border-top-color:#fff; border-radius:50%; animation:spin .8s linear infinite; }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
 
-  /* 下载进度条 */
-  .progress-wrap {
-    margin-top: 14px;
-    display: none;
-  }
-  .progress-wrap.active { display: block; }
-  .progress-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 12px;
-    color: var(--text-dim);
-    margin-bottom: 6px;
-  }
-  .progress-track {
-    height: 10px;
-    background: rgba(255,255,255,.08);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    overflow: hidden;
-  }
-  .progress-bar {
-    height: 100%;
-    width: 0%;
-    background: linear-gradient(90deg, #6366f1, #a855f7);
-    border-radius: 6px;
-    transition: width .2s ease;
-  }
-  .progress-pct { color: var(--text); font-weight: 600; }
-  .progress-phase { color: var(--text-dim); }
+  .progress-wrap{ margin-top:14px; display:none; }
+  .progress-wrap.active{ display:block; }
+  .progress-head{ display:flex; justify-content:space-between; align-items:center; font-size:12px; color:var(--text-dim); margin-bottom:6px; }
+  .progress-track{ height:10px; background:rgba(255,255,255,.08); border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+  .progress-bar{ height:100%; width:0%; background:linear-gradient(90deg,#6366f1,#a855f7); border-radius:6px; transition:width .2s ease; }
+  .progress-pct{ color:var(--text); font-weight:600; }
+  .progress-phase{ color:var(--text-dim); }
 
-  .footer {
-    text-align: center;
-    color: var(--text-dim);
-    font-size: 12px;
-    margin-top: 24px;
-  }
-  .hidden { display: none; }
+  .footer{ text-align:center; color:var(--text-dim); font-size:12px; margin-top:24px; opacity:.8; }
+  .hidden{ display:none; }
 </style>
 </head>
 <body>
 <div class="container">
-  <div class="header">
-    <h1><span class="logo">🔍</span> 超级嗅探 管理后台</h1>
-    <div style="display:flex; gap:10px; align-items:center;">
-      <a class="btn-primary" href="/admin/sniff" style="padding:7px 13px; border-radius:6px; background:linear-gradient(135deg,#a855f7,#6366f1); color:#fff; text-decoration:none; font-size:13px; font-weight:600;">🔎 万能嗅探</a>
+
+  <!-- 顶部横幅 -->
+  <div class="hero">
+    <div class="hero-top">
+      <h1><span class="logo">🔍</span> 超级嗅探 管理后台</h1>
+      <div class="nav-links">
+        <a class="nav-link primary" href="/admin/sniff">🔎 万能嗅探</a>
+        <a class="nav-link outline" href="/sniff?url=https%3A%2F%2Fwww.bilibili.com%2Fvideo%2FBV1xx411c7mD&detailed=1">🧪 嗅探 API</a>
+        <a class="nav-link outline" href="/node.js?url=https%3A%2F%2Fwww.bilibili.com%2Fvideo%2FBV1xx411c7mD">📄 单页解析 API</a>
+      </div>
+    </div>
+    <div class="hero-desc">
+      <span><span class="dot" style="background:var(--success);"></span><b id="stService">-</b></span>
       <span class="badge" id="serviceBadge">检测中...</span>
       <span class="badge" id="versionBadge">v-</span>
+      <span class="badge" id="uptimeBadge">已运行 --</span>
     </div>
   </div>
 
-  <!-- 服务状态 -->
-  <div class="status-bar">
-    <div class="status-item">
-      <div class="label">服务状态</div>
-      <div class="value" id="stService">-</div>
+  <!-- 运行监控 -->
+  <div class="section-title">📊 运行监控 <span class="line"></span></div>
+
+  <div class="kpi-grid">
+    <div class="kpi accent-blue">
+      <div class="kpi-ico">🌐</div>
+      <div class="kpi-label">浏览器池</div>
+      <div class="kpi-value" id="kpiBrowser">-</div>
+      <div class="kpi-sub" id="kpiBrowserSub">PagePool -</div>
     </div>
-    <div class="status-item">
-      <div class="label">监听端口</div>
-      <div class="value" id="stPort">-</div>
+    <div class="kpi accent-violet">
+      <div class="kpi-ico">🧩</div>
+      <div class="kpi-label">页面复用池</div>
+      <div class="kpi-value" id="kpiPage">-</div>
+      <div class="kpi-sub" id="kpiPageSub">占用率 -</div>
     </div>
-    <div class="status-item">
-      <div class="label">Chrome 版本</div>
-      <div class="value" id="stChrome">-</div>
+    <div class="kpi accent-cyan">
+      <div class="kpi-ico">🎯</div>
+      <div class="kpi-label">嗅探接口</div>
+      <div class="kpi-value" id="kpiProvider">-</div>
+      <div class="kpi-sub" id="kpiProviderSub">熔断 -</div>
     </div>
-    <div class="status-item">
-      <div class="label">当前版本</div>
-      <div class="value" id="stVersion">-</div>
+    <div class="kpi accent-green">
+      <div class="kpi-ico">📚</div>
+      <div class="kpi-label">LRU 缓存</div>
+      <div class="kpi-value" id="kpiCache">-</div>
+      <div class="kpi-sub" id="kpiCacheSub">解析<sup>+</sup><span id="kpiCacheParse">-</span>&nbsp;·&nbsp;嗅探<span id="kpiCacheUni">-</span></div>
     </div>
   </div>
+
+  <div class="grid2">
+    <!-- 系统资源 -->
+    <div class="card">
+      <div class="card-title"><span><span class="icon">🖥️</span> 系统资源</span><span class="badge" id="memBadge">-</span></div>
+      <div class="meter-row">
+        <span class="m-label">内存占用</span>
+        <div class="meter"><span class="fill-blue" id="memBar" style="width:0%"></span></div>
+        <span class="m-val" id="memVal">-</span>
+      </div>
+      <div class="meter-row">
+        <span class="m-label">浏览器池</span>
+        <div class="meter"><span class="fill-green" id="poolBar" style="width:0%"></span></div>
+        <span class="m-val" id="poolVal">-</span>
+      </div>
+      <div class="meter-row">
+        <span class="m-label">空闲内存</span>
+        <div class="meter"><span class="fill-orange" id="freeBar" style="width:0%"></span></div>
+        <span class="m-val" id="freeVal">-</span>
+      </div>
+      <div style="margin-top:6px; font-size:12px; color:var(--text-dim);">空闲内存近 20 次采样走势</div>
+      <canvas id="memChart"></canvas>
+    </div>
+
+    <!-- Provider Top5 -->
+    <div class="card">
+      <div class="card-title"><span><span class="icon">🏆</span> Provider 评分 Top5</span></div>
+      <div class="rank" id="rankList"><div style="color:var(--text-dim); font-size:13px;">加载中...</div></div>
+    </div>
+  </div>
+
+  <div class="grid2-3">
+    <!-- 万能嗅探配置 -->
+    <div class="card">
+      <div class="card-title"><span><span class="icon">⚙️</span> 万能嗅探配置</span></div>
+      <div class="kv"><span class="k">启用接口数</span><span class="v" id="cfgProviders">-</span></div>
+      <div class="kv"><span class="k">并发数</span><span class="v" id="cfgConcurrency">-</span></div>
+      <div class="kv"><span class="k">提前命中</span><span class="v" id="cfgEarlyHits">-</span></div>
+      <div class="kv"><span class="k">结果缓存条目</span><span class="v" id="cfgCacheSize">-</span></div>
+      <div class="kv"><span class="k">当前熔断接口</span><span class="v" id="cfgBroken">-</span></div>
+    </div>
+
+    <!-- 缓存详情 -->
+    <div class="card">
+      <div class="card-title"><span><span class="icon">🗃️</span> 缓存详情</span></div>
+      <div class="kv"><span class="k">单页解析缓存</span><span class="v" id="cacheParse">-</span></div>
+      <div class="kv"><span class="k">万能嗅探缓存</span><span class="v" id="cacheUni">-</span></div>
+      <div class="kv"><span class="k">监听端口</span><span class="v" id="cfgPort">-</span></div>
+      <div class="kv"><span class="k">Chrome 状态</span><span class="v" id="cfgChrome">-</span></div>
+      <div class="kv"><span class="k">更新源</span><span class="v" id="cfgSource">-</span></div>
+    </div>
+
+    <!-- 快捷测试 -->
+    <div class="card">
+      <div class="card-title"><span><span class="icon">🧪</span> 快捷测试</span></div>
+      <div class="test-form">
+        <input id="testUrl" type="text" placeholder="粘贴视频链接，如 https://www.bilibili.com/video/BV..."
+               onkeydown="if(event.key==='Enter')quickTest('sniff')">
+      </div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button class="btn btn-violet" style="flex:1" onclick="quickTest('sniff')">🔎 万能嗅探</button>
+        <button class="btn btn-outline" style="flex:1" onclick="quickTest('parse')">📄 单页解析</button>
+      </div>
+      <div class="test-result" id="testResult">&nbsp;<span class="dim">输入上方链接后点击测试，结果将显示在这里。</span></div>
+    </div>
+  </div>
+
+  <!-- 在线更新 -->
+  <div class="section-title">♻️ 在线更新 <span class="line"></span></div>
 
   <!-- 更新源切换 -->
   <div class="card source-card">
@@ -291,76 +398,45 @@
 
   <!-- 更新区域 -->
   <div class="grid">
-    <!-- 浏览器更新 -->
     <div class="card" id="browserCard">
-      <div class="card-title">
-        <span><span class="icon">🌐</span> 浏览器更新</span>
-        <span class="badge" id="browserUpdateBadge">-</span>
-      </div>
-      <div class="version-row">
-        <span class="version-label">当前版本</span>
-        <span class="version-value current" id="browserCurrent">-</span>
-      </div>
-      <div class="version-row">
-        <span class="version-label">最新版本</span>
-        <span class="version-value" id="browserLatest">-</span>
-      </div>
+      <div class="card-title"><span><span class="icon">🌐</span> 浏览器更新</span><span class="badge" id="browserUpdateBadge">-</span></div>
+      <div class="version-row"><span class="version-label">当前版本</span><span class="version-value current" id="browserCurrent">-</span></div>
+      <div class="version-row"><span class="version-label">最新版本</span><span class="version-value" id="browserLatest">-</span></div>
       <div class="desc">仅更新 Chrome 浏览器，不影响源码与服务逻辑。</div>
       <button class="btn btn-primary btn-block" id="btnBrowser" onclick="doUpdate('browser')">更新浏览器</button>
     </div>
-
-    <!-- 源码更新 -->
     <div class="card" id="sourceCard">
-      <div class="card-title">
-        <span><span class="icon">📦</span> 源码更新</span>
-        <span class="badge" id="sourceUpdateBadge">-</span>
-      </div>
-      <div class="version-row">
-        <span class="version-label">当前版本</span>
-        <span class="version-value current" id="sourceCurrent">-</span>
-      </div>
-      <div class="version-row">
-        <span class="version-label">最新版本</span>
-        <span class="version-value" id="sourceLatest">-</span>
-      </div>
+      <div class="card-title"><span><span class="icon">📦</span> 源码更新</span><span class="badge" id="sourceUpdateBadge">-</span></div>
+      <div class="version-row"><span class="version-label">当前版本</span><span class="version-value current" id="sourceCurrent">-</span></div>
+      <div class="version-row"><span class="version-label">最新版本</span><span class="version-value" id="sourceLatest">-</span></div>
       <div class="desc">仅更新项目源码（node.js、api.php 等），不影响浏览器。</div>
       <button class="btn btn-primary btn-block" id="btnSource" onclick="doUpdate('source')">更新源码</button>
     </div>
   </div>
 
   <!-- 一键升级 -->
-  <button class="btn btn-success btn-block btn-lg" id="btnAll" onclick="doUpdate('all')">
-    ⚡ 一键升级（浏览器 + 源码）
-  </button>
+  <button class="btn btn-success btn-block btn-lg" id="btnAll" onclick="doUpdate('all')">⚡ 一键升级（浏览器 + 源码）</button>
 
   <!-- 下载进度条 -->
   <div class="progress-wrap" id="progressWrap">
-    <div class="progress-head">
-      <span class="progress-phase" id="progressPhase">正在下载...</span>
-      <span class="progress-pct" id="progressPct">0%</span>
-    </div>
-    <div class="progress-track">
-      <div class="progress-bar" id="progressBar"></div>
-    </div>
+    <div class="progress-head"><span class="progress-phase" id="progressPhase">正在下载...</span><span class="progress-pct" id="progressPct">0%</span></div>
+    <div class="progress-track"><div class="progress-bar" id="progressBar"></div></div>
   </div>
 
   <!-- 日志 -->
   <div class="log-box" id="logBox"><span class="log-time">[系统]</span> 等待操作...</div>
 
-  <div class="footer">超级嗅探 <span id="footerVersion">v-</span> · 在线更新系统（稳定版 / 先行版）</div>
+  <div class="footer">超级嗅探 <span id="footerVersion">v-</span> · 运行监控 + 在线更新（稳定版 / 先行版）</div>
 </div>
 
 <script>
 // ========== 通用工具 ==========
-// 把相对 URL 转成绝对路径（location.origin 不含 user:pass，避免浏览器
-// "Request cannot be constructed from a URL that includes credentials" 错误）
-function abs(path) {
-  return location.origin + path;
-}
+function abs(path) { return location.origin + path; }
 
-// ========== 状态管理 ==========
 let updating = false;
 let latestRelease = null;
+let startTime = Date.now();
+let memHistory = [];
 
 function log(msg, level) {
   const box = document.getElementById('logBox');
@@ -382,13 +458,150 @@ function setButtons(disabled) {
   ['btnBrowser', 'btnSource', 'btnAll'].forEach((id) => {
     document.getElementById(id).disabled = disabled;
   });
-  if (disabled) {
-    document.getElementById('browserCard').classList.add('updating');
-    document.getElementById('sourceCard').classList.add('updating');
-  } else {
-    document.getElementById('browserCard').classList.remove('updating');
-    document.getElementById('sourceCard').classList.remove('updating');
+  document.getElementById('browserCard').classList.toggle('updating', disabled);
+  document.getElementById('sourceCard').classList.toggle('updating', disabled);
+}
+
+// ========== 运行时长 & 内存走势 ==========
+function fmtDur(ms) {
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  if (d > 0) return `${d}天${h}时${m}分`;
+  if (h > 0) return `${h}时${m}分${sec}秒`;
+  return `${m}分${sec}秒`;
+}
+function tickUptime() {
+  const b = document.getElementById('uptimeBadge');
+  if (b) b.textContent = '已运行 ' + fmtDur(Date.now() - startTime);
+}
+
+function drawChart() {
+  const c = document.getElementById('memChart');
+  if (!c) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = 64;
+  c.width = w * dpr; c.height = h * dpr;
+  c.style.height = h + 'px';
+  const ctx = c.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+  const data = memHistory.slice(-20);
+  if (data.length < 2) {
+    ctx.fillStyle = 'rgba(148,163,184,.5)'; ctx.font = '12px sans-serif';
+    ctx.fillText('等待采样...', 10, h / 2);
+    return;
   }
+  const min = Math.min(...data), max = Math.max(...data);
+  const range = (max - min) || 1;
+  ctx.beginPath();
+  ctx.strokeStyle = '#22d3ee'; ctx.lineWidth = 2;
+  const step = (w - 12) / (data.length - 1);
+  data.forEach((v, i) => {
+    const x = 6 + i * step;
+    const y = 4 + (1 - (v - min) / range) * (h - 8);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  // 渐变填充
+  ctx.lineTo(6 + (data.length - 1) * step, h);
+  ctx.lineTo(6, h);
+  ctx.closePath();
+  ctx.globalAlpha = .15;
+  ctx.fillStyle = '#22d3ee';
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = 'rgba(226,232,240,.8)'; ctx.font = '11px sans-serif';
+  ctx.fillText(Math.round(max) + 'MB', w - 56, 12);
+  ctx.fillText(Math.round(min) + 'MB', w - 56, h - 6);
+}
+
+// ========== 渲染运行监控 ==========
+function renderDashboard(data) {
+  const mem = data.memory || {};
+  const used = Math.max(0, (mem.totalMB || 0) - (mem.freeMB || 0));
+  const memPct = mem.totalMB ? Math.round((used / mem.totalMB) * 100) : 0;
+  const freePct = mem.totalMB ? Math.round(((mem.freeMB || 0) / mem.totalMB) * 100) : 0;
+
+  // KPI
+  document.getElementById('kpiBrowser').textContent = (data.browserPool ?? '?') + ' 个';
+  document.getElementById('kpiBrowserSub').textContent = `Page 复用池 ${data.pagePoolTotal ?? '?'} 页`;
+  document.getElementById('kpiPage').textContent = (data.pagePoolBusy ?? '?') + ' / ' + (data.pagePoolTotal ?? '?');
+  const pagePct = data.pagePoolTotal ? Math.round(((data.pagePoolBusy || 0) / data.pagePoolTotal) * 100) : 0;
+  document.getElementById('kpiPageSub').textContent = '占用率 ' + pagePct + '%';
+  document.getElementById('kpiProvider').textContent = (data.providers ?? '?') + ' 个';
+  const broken = (data.universal && data.universal.circuitBroken) || 0;
+  document.getElementById('kpiProviderSub').textContent = '熔断 ' + broken + ' 个';
+  const cache = data.cache || {};
+  const cacheTotal = (cache.parse || 0) + (cache.universal || 0);
+  document.getElementById('kpiCache').textContent = cacheTotal + ' 条';
+  document.getElementById('kpiCacheParse').textContent = cache.parse ?? '?';
+  document.getElementById('kpiCacheUni').textContent = cache.universal ?? '?';
+
+  // 系统资源
+  const memBar = document.getElementById('memBar');
+  memBar.style.width = memPct + '%';
+  memBar.className = 'fill-' + (memPct > 85 ? 'red' : memPct > 60 ? 'orange' : 'blue');
+  document.getElementById('memVal').textContent = used.toLocaleString() + ' / ' + (mem.totalMB || 0).toLocaleString() + ' MB';
+  document.getElementById('freeBar').style.width = freePct + '%';
+  document.getElementById('freeVal').textContent = freePct + '%';
+  const poolPct = data.browserPool ? Math.round((data.browserPool / Math.max(data.browserPool, 1)) * 100) : 0;
+  document.getElementById('poolBar').style.width = (data.browserPool > 0 ? 100 : 0) + '%';
+  document.getElementById('poolVal').textContent = (data.browserPool ?? '?') + ' / ' + (data.browserPool ?? '?') + ' 在线';
+  setBadge(document.getElementById('memBadge'),
+    memPct > 85 ? '内存紧张' : memPct > 60 ? '占用偏高' : '运行良好',
+    memPct > 85 ? 'offline' : memPct > 60 ? 'warn' : 'online');
+
+  // 内存走势
+  memHistory.push(mem.freeMB);
+  if (memHistory.length > 20) memHistory.shift();
+  drawChart();
+
+  // Top5 榜单
+  const top = (data.providerStats && data.providerStats.rankedTop5) || [];
+  const rank = document.getElementById('rankList');
+  if (top.length === 0) {
+    rank.innerHTML = '<div style="color:var(--text-dim);font-size:13px;">暂无评分数据，跑一次嗅探后生成。</div>';
+  } else {
+    rank.innerHTML = top.map((item, i) => {
+      const host = safeHost(item.p);
+      const medal = i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : 'plain';
+      const medalTxt = ['🥇','🥈','🥉'][i] || (i + 1);
+      const score = Math.round(item.score || 0);
+      const barW = Math.max(8, Math.min(100, Math.round((score / (top[0]?.score || 1)) * 100)));
+      return `
+        <div class="rank-item">
+          <div class="rank-medal ${medal}">${medalTxt}</div>
+          <div class="rank-host" title="${escapeHtml(item.p || '')}">${escapeHtml(host)}</div>
+          <div class="rank-bar"><span style="width:${barW}%"></span></div>
+          <div class="rank-score">${score}</div>
+          ${item.broken ? '<span class="broked-badge">熔断</span>' : ''}
+        </div>`;
+    }).join('');
+  }
+
+  // 万能嗅探配置
+  const u = data.universal || {};
+  document.getElementById('cfgProviders').textContent = (u.providers ?? '?') + ' 个';
+  document.getElementById('cfgConcurrency').textContent = u.concurrency ?? '?';
+  document.getElementById('cfgEarlyHits').textContent =
+    u.earlyHits === 0 ? '全部执行' : (u.earlyHits + ' 家');
+  document.getElementById('cfgCacheSize').textContent = (u.cacheSize ?? '?') + ' 条';
+  document.getElementById('cfgBroken').textContent = (u.circuitBroken ?? 0) + ' 个';
+
+  // 缓存详情 & 其他
+  document.getElementById('cacheParse').textContent = (cache.parse ?? '?') + ' 条';
+  document.getElementById('cacheUni').textContent = (cache.universal ?? '?') + ' 条';
+  document.getElementById('cfgPort').textContent = data.port ?? '?';
+  document.getElementById('cfgChrome').textContent = (data.chromeInstalled ? '✅ ' : '❌ ') + (data.chromeVersion || '未知');
+  document.getElementById('cfgSource').textContent = (data.sourceLabel || '-') + ' · ' + (data.branch || '-');
+}
+
+function safeHost(u) {
+  try { const h = new URL(u); if (h.hostname) return h.hostname.replace(/^www\./, ''); return u; }
+  catch (e) { return u || '(unknown)'; }
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 // ========== 更新源 ==========
@@ -414,17 +627,11 @@ async function switchSource(source) {
       body: JSON.stringify({ source })
     });
     const data = await res.json();
-    if (data.code !== 200) {
-      log('切换更新源失败: ' + (data.msg || '未知错误'), 'err');
-      return;
-    }
+    if (data.code !== 200) { log('切换更新源失败: ' + (data.msg || '未知错误'), 'err'); return; }
     renderSource(data.source);
     log(`已切换到${data.label}（${data.branch} 分支）`, 'ok');
-    // 切换后重新检查更新
     checkUpdate();
-  } catch (e) {
-    log('切换更新源失败: ' + e.message, 'err');
-  }
+  } catch (e) { log('切换更新源失败: ' + e.message, 'err'); }
 }
 
 // ========== 加载状态 ==========
@@ -432,18 +639,19 @@ async function loadStatus() {
   try {
     const res = await fetch(abs('/admin/api/status'));
     const data = await res.json();
-    document.getElementById('stService').textContent = data.service;
+    document.getElementById('stService').textContent = data.service + ' · 端口 ' + data.port;
     document.getElementById('stPort').textContent = data.port;
     document.getElementById('stChrome').textContent = data.chromeVersion;
     document.getElementById('stVersion').textContent = 'v' + data.version;
     document.getElementById('versionBadge').textContent = 'v' + data.version;
     document.getElementById('footerVersion').textContent = 'v' + data.version;
-    setBadge(document.getElementById('serviceBadge'), data.service === '运行中' ? '运行中' : '异常', data.service === '运行中' ? 'online' : 'offline');
+    setBadge(document.getElementById('serviceBadge'), data.service === '运行中' ? '服务运行中' : '服务异常', data.service === '运行中' ? 'online' : 'offline');
     document.getElementById('browserCurrent').textContent = data.chromeVersion;
     document.getElementById('sourceCurrent').textContent = 'v' + data.version;
     if (data.source) renderSource(data.source);
+    renderDashboard(data);
   } catch (e) {
-    setBadge(document.getElementById('serviceBadge'), '离线', 'offline');
+    setBadge(document.getElementById('serviceBadge'), '服务离线', 'offline');
     log('无法连接后台服务: ' + e.message, 'err');
   }
 }
@@ -453,40 +661,21 @@ async function checkUpdate() {
   try {
     const res = await fetch(abs('/admin/api/check-update'));
     const data = await res.json();
-    if (data.code !== 200) {
-      log('检查更新失败: ' + (data.msg || '未知错误'), 'warn');
-      return;
-    }
+    if (data.code !== 200) { log('检查更新失败: ' + (data.msg || '未知错误'), 'warn'); return; }
     latestRelease = data;
-    // 用规范化后的基础版本号展示（去掉 -cs1 后缀），分支名单独显示，避免版本不一致
     const latestVer = data.latestVersionBase || String(data.latestVersion || '').split('-')[0];
     const branchLabel = data.branch ? `（${data.branch} 分支）` : '';
-
-    // 源码
     document.getElementById('sourceLatest').textContent = 'v' + latestVer + branchLabel;
     const srcNeed = data.sourceNeedUpdate;
-    setBadge(
-      document.getElementById('sourceUpdateBadge'),
-      srcNeed ? '有新版本' : '已是最新',
-      srcNeed ? 'online' : ''
-    );
+    setBadge(document.getElementById('sourceUpdateBadge'), srcNeed ? '有新版本' : '已是最新', srcNeed ? 'online' : '');
     document.getElementById('sourceLatest').className = 'version-value ' + (srcNeed ? 'new' : 'current');
-
-    // 浏览器
     const chromeNow = document.getElementById('stChrome').textContent;
     document.getElementById('browserLatest').textContent = data.browserAsset ? data.browserAsset.name : '无浏览器包';
     const brNeed = data.browserNeedUpdate;
-    setBadge(
-      document.getElementById('browserUpdateBadge'),
-      brNeed ? '可更新' : '已是最新',
-      brNeed ? 'online' : ''
-    );
+    setBadge(document.getElementById('browserUpdateBadge'), brNeed ? '可更新' : '已是最新', brNeed ? 'online' : '');
     document.getElementById('browserLatest').className = 'version-value ' + (brNeed ? 'new' : 'current');
-
     log(`检查完成：${data.sourceLabel || ''}最新版本 v${latestVer}${branchLabel}，源码${srcNeed ? '有更新' : '已最新'}，浏览器${brNeed ? '有更新' : '已最新'}`, 'ok');
-  } catch (e) {
-    log('检查更新失败: ' + e.message, 'err');
-  }
+  } catch (e) { log('检查更新失败: ' + e.message, 'err'); }
 }
 
 // ========== 执行更新 ==========
@@ -503,9 +692,7 @@ function setProgress(p) {
   if (p.total > 0) {
     const mb = (b) => (b >= 1024 * 1024 ? (b / 1024 / 1024).toFixed(1) + ' MB' : (b / 1024).toFixed(1) + ' KB');
     phaseEl.textContent = `正在下载${phase} ${mb(p.received || 0)} / ${mb(p.total)}`;
-  } else {
-    phaseEl.textContent = `正在下载${phase}...`;
-  }
+  } else { phaseEl.textContent = `正在下载${phase}...`; }
 }
 function resetProgress() {
   const wrap = document.getElementById('progressWrap');
@@ -519,15 +706,12 @@ async function doUpdate(type) {
   setButtons(true);
   resetProgress();
   log('========== 开始更新 ==========', 'info');
-
   try {
     const res = await fetch(abs('/admin/api/update'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type })
     });
-
-    // 流式读取日志
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -547,27 +731,50 @@ async function doUpdate(type) {
             log(item.msg, item.ok ? 'ok' : 'err');
             if (item.ok) setProgress({ pct: 100, phase: '', received: 0, total: 0 });
             setTimeout(resetProgress, 3000);
-            if (item.restart) {
-              log('服务即将重启，页面将自动刷新...', 'warn');
-              setTimeout(() => location.reload(), 2500);
-            }
+            if (item.restart) { log('服务即将重启，页面将自动刷新...', 'warn'); setTimeout(() => location.reload(), 2500); }
           }
         } catch (e) { /* 忽略非 JSON 行 */ }
       });
     }
-  } catch (e) {
-    log('更新请求失败: ' + e.message, 'err');
-  } finally {
+  } catch (e) { log('更新请求失败: ' + e.message, 'err'); }
+  finally {
     setButtons(false);
-    // 刷新状态
     setTimeout(() => { loadStatus(); checkUpdate(); }, 1500);
+  }
+}
+
+// ========== 快捷测试 ==========
+let testBusy = false;
+async function quickTest(type) {
+  const url = document.getElementById('testUrl').value.trim();
+  const box = document.getElementById('testResult');
+  if (!url) { box.innerHTML = '<span class="err">⚠️ 请先输入视频链接。</span>'; return; }
+  if (testBusy) return;
+  testBusy = true;
+  const btns = document.querySelectorAll('.card .btn');
+  box.innerHTML = '<span class="dim"><span class="spinner"></span> 正在' + (type === 'sniff' ? '万能嗅探' : '单页解析') + '：' + escapeHtml(url) + ' ...</span>';
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 50000);
+  const api = type === 'sniff' ? '/sniff' : '/node.js';
+  try {
+    const res = await fetch(abs(api) + '?url=' + encodeURIComponent(url), { signal: ctrl.signal });
+    const text = await res.text();
+    let pretty;
+    try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch (e) { pretty = text; }
+    box.innerHTML = '<span class="ok">✅ 返回 HTTP ' + res.status + '：</span>\n' + escapeHtml(pretty);
+  } catch (e) {
+    box.innerHTML = '<span class="err">❌ 请求失败：' + escapeHtml(e.message) + '</span>';
+  } finally {
+    clearTimeout(timer);
+    testBusy = false;
   }
 }
 
 // ========== 初始化 ==========
 loadStatus();
 checkUpdate();
-setInterval(() => { if (!updating) loadStatus(); }, 30000);
+setInterval(() => { if (!updating) loadStatus(); }, 15000);
+setInterval(tickUptime, 1000);
 </script>
 </body>
 </html>
