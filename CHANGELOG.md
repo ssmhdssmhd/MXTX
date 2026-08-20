@@ -16,6 +16,7 @@
 ### Changed
 - 🛡️ 新增空安全 `setText(id, text)` 助手：元素缺失时静默跳过，不再让单个元素问题拖垮整页渲染
 - 🧹 仪表盘渲染 `renderDashboard()` / 状态加载 `loadStatus()` / 更新检查 `checkUpdate()` 全部改为空安全写入；端口已在顶部 `stService` 显示、版本由 `versionBadge` 显示、Chrome 状态由监控卡展示，不再依赖缺失元素
+- 📄 新增「API 调用文档」（API调用文档.md）：单接口（/api.php、/node.js）与双接口（/sniff 万能嗅探）的可复制调用方式、参数表、返回格式与 JS/PHP 示例；README 顶部新增双分支版本状态（main 稳定版 / cs1 先行版）
 
 ### 验证
 - 内联脚本 `node --check` 语法通过
