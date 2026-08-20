@@ -5,6 +5,31 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.6.0] - 2026-08-20
+
+### 命中率专项优化（网络检索 + 实测验证）
+
+### Added
+- 🔌 新增 4 条可靠解析线路：`qianqi`（api.qianqi.net）、`bd.jx`（bd.jx.cn）、`fongmi`（json.fongmi.cc/web）、`hls.one`（jx.hls.one）
+  - 来源：网络检索全网解析接口 → 汇总 40+ 候选 → 逐条连通性测试（undici 代理感知）→ 真实 B 站视频 Puppeteer 渲染验证
+  - 渲染实测 4 条均命中 m3u8/mp4 直链（bilivideo.com 直链 + 0567890.xyz 缓存源），现共 16 条线路
+- 🧭 官方优先多线路：`/sniff` 改为官方解析与第三方万能嗅探并行执行，官方命中优先、第三方命中线路一并合并输出（`urls` / `allUrls` / `providers` 均含官方行 + 第三方行，去重合并）
+- 🕸️ 浏览器渲染 iframe/SUIYI 链追踪：主页面无命中时自动解析内嵌播放器 iframe（≤2 层）并进入播放器页重新等待捕获
+- 📡 网络捕获增强：除 `.m3u8` 外，同步捕获 `.mp4/.flv/.ts` 及 SUIYI 等无扩展名 CDN 视频响应（按媒体类型判定，避免误抓静态资源）
+- 🧹 孤儿 Chrome 进程自动清理：健康检查时遍历进程表，清理浏览器池外的残留 Chrome 进程，根治内存泄漏导致「渲染被跳过 → 命中率骤降」的问题
+
+### Changed
+- `/sniff` 第三方嗅探在官方命中时默认 `earlyHits=3` 快速补足备用线路，避免拖长整体耗时；未命中官方时仍按原配置跑全部 Provider
+- `/sniff` 非 detailed 响应补充 `allUrls` 字段，便于客户端直接展示多线路
+
+### Fixed
+- 🐛 修复第三方线路成功率过低：沙箱/代理环境下大部分解析接口需浏览器渲染才能出直链，此前孤儿 Chrome 导致内存超阈值（85%）跳过渲染 → 现在自动清理 + iframe 链追踪双管齐下
+
+### 验证
+- 语法检查 `node --check node.js` 通过
+- 真实 B 站视频（BV1kS8H6VERt）渲染探针：16 条线路中 4 条新增线路稳定命中直链，官方（bilibili-official）优先返回
+- `/sniff`（含 detailed）与 `/node.js` 返回均含多线路 `urls`/`allUrls`
+
 ## [2.5.0] - 2026-08-20
 
 ### 管理后台新增「运行监控」看板（UI 增强）

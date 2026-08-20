@@ -244,9 +244,11 @@ if (MX_CACHE_PERSIST) {
   catch (e) { console.log(`[超级嗅探] 缓存目录创建失败（${MX_CACHE_DIR}）: ${e.message}`); }
 }
 
-// 内置 18 个 PROVIDER
-// v2.5.1：线路清理——移除实测不可达/已失效域名（DNS 解析失败或连接超时），
-// 保住可达的播放器/解析入口；其余可用的解析能力靠「HTTP iframe 链追踪 + 编码 URL 解码」补足命中率。
+// 内置 PROVIDER（第三方解析接口）
+// v2.6.0：线路清洗与补充——保留实测可达的 12 条旧线路，
+// 经网络检索 + 真实视频 Puppeteer 渲染验证新增 4 条可靠线路（qianqi / bd.jx / fongmi / hls.one，
+// 均能在 B 站等平台渲染命中 m3u8/mp4 直链）；移除实测不可达/已失效域名。
+// 其余可用的解析能力靠「HTTP iframe 链追踪 + 编码 URL 解码」补足命中率。
 const PROVIDERS = [
   'https://jx.xmflv.cc/?url=',
   'https://jx.xmflv.com/?url=',
@@ -259,7 +261,11 @@ const PROVIDERS = [
   'https://json.ovvo.pro/jx.php?url=',
   'https://www.yemu.xyz/?url=',
   'https://jx.yangtu.top/?url=',
-  'https://jx.playerjy.com/?url='
+  'https://jx.playerjy.com/?url=',
+  'https://api.qianqi.net/vip/?url=',
+  'https://bd.jx.cn/?url=',
+  'https://json.fongmi.cc/web?url=',
+  'https://jx.hls.one/?url='
 ];
 
 // ============================================================
@@ -880,6 +886,44 @@ async function browserSniff(fullUrl, targetUrl, timeout) {
     if (holder._hits) for (const u of holder._hits) urls.add(u);
     if (MX_DEBUG) console.log(`[嗅探][浏览器] ${fullUrl} 网络捕获 m3u8 ${holder._hits ? holder._hits.size : 0} 个，共 ${urls.size} 个URL`);
 
+    // v2.6.0：iframe/SUIYI 链追踪——主页面无命中时，解析内嵌播放器 iframe（≤2 层），
+    // 直接进入播放器页重新等待 m3u8/mp4 请求，覆盖多层嵌套 / JS 动态注入的播放器链路。
+    if (urls.size === 0) {
+      const seenFrames = new Set();
+      for (let hop = 0; hop < 2; hop++) {
+        const html = await page.content().catch(() => '');
+        const frameSrcs = [];
+        let m;
+        const re = /<iframe[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi;
+        while ((m = re.exec(html)) !== null) {
+          try {
+            const u = new URL(m[1], page.url()).href;
+            if (!seenFrames.has(u)) { seenFrames.add(u); frameSrcs.push(u); }
+          } catch (e) { }
+        }
+        const next = frameSrcs[0];
+        if (!next) break;
+        const hitBefore = holder._hits ? holder._hits.size : 0;
+        try {
+          await page.goto(next, { waitUntil: 'domcontentloaded', timeout: Math.min(timeout, MX_PARSE_TIMEOUT) });
+          const cap2 = Math.min(Math.max(MX_EXTRA_WAIT, 3000), timeout, 7000);
+          const st2 = Date.now();
+          while (Date.now() - st2 < cap2) {
+            if (holder._hits && holder._hits.size > hitBefore) break;
+            await new Promise((r) => setTimeout(r, 500));
+          }
+        } catch (e) { }
+        try {
+          const c2 = await page.content().catch(() => '');
+          extractFromText(c2).forEach((u) => urls.add(u));
+          extractVideoUrls(c2).forEach((u) => urls.add(u));
+        } catch (e) { }
+        if (holder._hits) for (const u of holder._hits) urls.add(u);
+        if (MX_DEBUG) console.log(`[嗅探][浏览器] ${fullUrl} iframe链第${hop + 1}层 ${next} -> 累计 ${urls.size} 个URL`);
+        if (urls.size > 0) break;
+      }
+    }
+
     return [...urls];
   } catch (e) {
     if (MX_DEBUG) console.log(`[嗅探][浏览器] ${fullUrl} 早期异常: ${e.message}`);
@@ -1394,7 +1438,12 @@ class PageHolder {
       try {
         const ct = (resp.headers() && (resp.headers()['content-type'] || '')) || '';
         const url = resp.url();
-        if (/\.m3u8(\?|$)/i.test(url) || /mpegurl/i.test(ct)) {
+        // v2.6.0：除 .m3u8 外，同时捕获 .mp4/.flv/.ts 及 SUIYI 等无扩展名 CDN 视频响应
+        // （视频媒体类型或路径含视频扩展名；避免误抓 js/png 等静态资源）
+        const isVideoResp =
+          /\.(m3u8|mp4|flv|ts)(\?|$)/i.test(url) ||
+          /mpegurl|video\/(mp4|x-flv|mp2t|quicktime)|application\/vnd\.apple\.mpegurl/i.test(ct);
+        if (isVideoResp) {
           if (!this._hits) this._hits = new Set();
           this._hits.add(url);
           return;
@@ -1635,8 +1684,43 @@ async function initBrowserPool() {
   browserHealthTimer.unref && browserHealthTimer.unref();
 }
 
+// v2.6.0：清理孤儿 Chrome 进程——父进程（Puppeteer 管理的浏览器主进程）已消失但
+// 子进程残留时，会持续占用内存导致浏览器渲染被内存阈值跳过、命中率骤降。
+// 遍历 ps 进程表，杀掉不属于浏览器池（且父链上无已知主进程）的残留 Chrome。
+function cleanupOrphanChrome() {
+  try {
+    const { execFileSync } = require('child_process');
+    const known = new Set();
+    for (const bw of browserPool) if (bw._pid) known.add(String(bw._pid));
+    const out = execFileSync('ps', ['-eo', 'pid,ppid,comm'], { encoding: 'utf8', timeout: 5000 });
+    const pids = new Map(); // pid -> ppid（仅 Chrome 进程）
+    for (const line of out.split('\n')) {
+      const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
+      if (m && /chrome/i.test(m[3])) pids.set(m[1], m[2]);
+    }
+    const isDescendantOfKnown = (pid) => {
+      let cur = pid, hops = 0;
+      while (cur && hops < 10) {
+        if (known.has(String(cur))) return true;
+        cur = pids.get(cur);
+        hops++;
+      }
+      return false;
+    };
+    let killed = 0;
+    for (const pid of pids.keys()) {
+      if (known.has(String(pid))) continue;
+      if (isDescendantOfKnown(pid)) continue;
+      try { process.kill(Number(pid), 'SIGKILL'); killed++; } catch (e) { }
+    }
+    if (killed > 0) console.log(`[超级嗅探] 清理孤儿 Chrome 进程 ${killed} 个`);
+  } catch (e) { }
+}
+
 async function browserPoolHealthCheck() {
   if (!MX_BROWSER_ENABLE || MX_BROWSER_POOL_SIZE <= 0) return;
+  // 内存泄漏根因预防：先清理残留 Chrome，再巡检（保证浏览器渲染兜底可用）
+  try { cleanupOrphanChrome(); } catch (e) { }
   const executablePath = checkChrome();
   if (!executablePath) return;
   const size = MX_BROWSER_POOL_SIZE;
@@ -2089,33 +2173,53 @@ app.get('/sniff', async (req, res) => {
   }
 
   try {
-    // 官方视频平台专用解析（腾讯/B站/搜狐直连官方接口），命中则直接返回（不占用 Provider 并发）
-    // official=0 时跳过官方直连，强制跑全部 Provider（用于失败原因分析 / 调试第三方接口）
+    // 官方视频平台专用解析（腾讯/B站/搜狐直连官方接口）与第三方万能嗅探并行执行。
+    // v2.6.0：官方命中优先返回，同时把第三方命中线路一并合并输出，实现「官方优先多线路」；
+    // official=0 时跳过官方直连，仅跑全部 Provider（用于失败原因分析 / 调试第三方接口）。
     const skipOfficial = req.query.official === '0' || req.query.official === 'false';
-    const official = skipOfficial ? null : await officialVideoResolve(videoUrl);
-    if (official && official.urls.length > 0) {
-      const oSniff = { urls: official.urls, hitProviders: 1, totalProviders: 1, durationMs: 0, source: official.source };
-      universalCache.set(cacheKey, oSniff);
-      if (detailed) {
-        return res.json({ code: 200, ...oSniff });
-      }
-      return res.json({ code: 200, url: official.urls[0], provider: official.source });
-    }
-    // 支持 providers= 过滤，便于调试单家接口（逗号分隔的完整接口前缀）
     let onlyProviders;
     if (req.query.providers) {
       onlyProviders = req.query.providers.split(',').map((s) => s.trim()).filter(Boolean);
     }
-    const result = await universalSem.run(() => runUniversalSniff(videoUrl, onlyProviders ? { providers: onlyProviders } : {}));
+    const sniffStart = Date.now();
+    const [officialRes, uniRes] = await Promise.allSettled([
+      skipOfficial ? Promise.resolve(null) : officialVideoResolve(videoUrl),
+      universalSem.run(() => runUniversalSniff(videoUrl, {
+        providers: onlyProviders,
+        // 官方已优先命中时，第三方只需快速补足 2~3 条备用线路，避免拖长整体耗时
+        earlyHits: MX_UNIVERSAL_EARLY_HITS > 0 ? MX_UNIVERSAL_EARLY_HITS : 3
+      }))
+    ]);
+    const official = officialRes.status === 'fulfilled' ? officialRes.value : null;
+    const uni = uniRes.status === 'fulfilled' ? uniRes.value : null;
+    const officialUrls = (official && official.urls) ? official.urls : [];
+    const uniUrls = (uni && uni.urls) ? uni.urls : [];
+    // 官方优先 + 第三方去重合并（同一视频源的不同线路都保留）
+    const mergedUrls = dedupResults([...officialUrls, ...uniUrls]);
+    const officialRow = officialUrls.length
+      ? [{ provider: official.source, status: 'ok', urls: officialUrls, official: true }]
+      : [];
+    const providerRows = [...officialRow, ...((uni && uni.providers) || [])];
+    const hitCount = (officialUrls.length ? 1 : 0) + ((uni && uni.hitProviders) || 0);
+    const totalCount = (officialUrls.length ? 1 : 0) + ((uni && uni.totalProviders) || 0);
+    const sniffResult = {
+      urls: mergedUrls,
+      providers: providerRows,
+      totalProviders: totalCount,
+      hitProviders: hitCount,
+      totalUrls: mergedUrls.length,
+      durationMs: Date.now() - sniffStart,
+      source: officialUrls.length ? official.source + '+universal' : (uni && uni.source)
+    };
     // v2.4.5：成功结果按完整 TTL 缓存；失败（空结果）仅短缓存，临时故障可快速恢复
-    universalCache.set(cacheKey, result, result && result.urls && result.urls.length > 0 ? undefined : MX_UNIVERSAL_EMPTY_TTL * 1000);
+    universalCache.set(cacheKey, sniffResult, mergedUrls.length ? undefined : MX_UNIVERSAL_EMPTY_TTL * 1000);
     if (detailed) {
-      return res.json({ code: 200, ...result });
+      return res.json({ code: 200, ...sniffResult });
     }
-    if (result.urls && result.urls.length > 0) {
-      return res.json({ code: 200, url: result.urls[0] });
+    if (mergedUrls.length > 0) {
+      return res.json({ code: 200, url: mergedUrls[0], allUrls: mergedUrls, provider: sniffResult.source });
     }
-    return res.json({ code: 404, msg: '未找到播放链接', providers: result.hitProviders + '/' + result.totalProviders });
+    return res.json({ code: 404, msg: '未找到播放链接', providers: hitCount + '/' + totalCount });
   } catch (err) {
     return res.json({ code: 500, msg: '嗅探失败: ' + err.message });
   }
