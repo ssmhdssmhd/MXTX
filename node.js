@@ -245,24 +245,20 @@ if (MX_CACHE_PERSIST) {
 }
 
 // 内置 18 个 PROVIDER
+// v2.5.1：线路清理——移除实测不可达/已失效域名（DNS 解析失败或连接超时），
+// 保住可达的播放器/解析入口；其余可用的解析能力靠「HTTP iframe 链追踪 + 编码 URL 解码」补足命中率。
 const PROVIDERS = [
   'https://jx.xmflv.cc/?url=',
   'https://jx.xmflv.com/?url=',
   'https://im1907.top/?jx=',
-  'https://yparse.ik9.cc/index.php?url=',
   'https://www.ckplayer.vip/jiexi/?url=',
   'https://jiexi.789jiexi.icu:4433/?url=',
   'https://www.8090g.cn/?url=',
   'https://www.pangujiexi.com/jiexi/?url=',
-  'https://jx.m3u8.tv/jiexi/?url=',
   'https://www.playm3u8.cn/jiexi.php?url=',
   'https://json.ovvo.pro/jx.php?url=',
-  'https://api.qianqi.net/vip/?url=',
-  'https://jx.yparse.com/index.php?url=',
   'https://www.yemu.xyz/?url=',
   'https://jx.yangtu.top/?url=',
-  'https://jx.4kdv.com/?url=',
-  'https://www.mtosz.com/m3u8.php?url=',
   'https://jx.playerjy.com/?url='
 ];
 
@@ -566,6 +562,62 @@ function extractVideoUrls(text) {
   return [...found];
 }
 
+// v2.5.1：编码/混淆 URL 解码——许多播放器页把真实 m3u8/mp4 藏在
+// 转义符（\u0026 \u003d \\/ %26 %3D）、base64（atob）、hex（fromCharCode）或
+// unescape(%xx) 里，HTTP 阶段先把它们劈开再跑正则，不再只认明文 .m3u8/.mp4。
+function decodeEmbeddedVideoUrls(text) {
+  const found = new Set();
+  if (!text || typeof text !== 'string') return [];
+  // 1) 归一化常见转义，让连接符恢复可读
+  let normalized = text
+    .replace(/\\u0026/gi, '&')
+    .replace(/\\u003d/gi, '=')
+    .replace(/\\\/|\/\//g, (m) => (m === '\\/' ? '/' : m))
+    .replace(/%26/gi, '&')
+    .replace(/%3D/gi, '=');
+  extractVideoUrls(normalized).forEach((u) => found.add(u));
+  extractFromText(normalized).forEach((u) => found.add(u));
+
+  // 2) fromCharCode 混淆：'[...charCode 数组...]' → 拼接还原出明文
+  const cc = text.match(/fromCharCode\s*\(([^)]*)\)/gi) || [];
+  for (const chunk of cc) {
+    const nums = chunk.match(/\d+/gi);
+    if (nums && nums.length > 20) {
+      try {
+        const decoded = String.fromCharCode(...nums.map(Number));
+        if (/https?:/.test(decoded)) {
+          extractVideoUrls(decoded).forEach((u) => found.add(u));
+          extractFromText(decoded).forEach((u) => found.add(u));
+        }
+      } catch (e) { }
+    }
+  }
+
+  // 3) base64 片段：把连续长 base64 串 atob 后扫描（找含 http 的明文段）
+  const b64s = text.match(/[A-Za-z0-9+/]{40,}={0,2}/g) || [];
+  for (const b of b64s.slice(0, 40)) {
+    try {
+      const decoded = Buffer.from(b, 'base64').toString('utf8');
+      if (/https?:/.test(decoded)) {
+        extractVideoUrls(decoded).forEach((u) => found.add(u));
+        extractFromText(decoded).forEach((u) => found.add(u));
+      }
+    } catch (e) { }
+  }
+  // 4) unescape(%xx) 拼接
+  const esc = text.match(/unescape\s*\(\s*['"]([^'"]+)['"]\s*\)/gi) || [];
+  for (const s of esc) {
+    try {
+      const inner = s.match(/'([^']+)'/);
+      if (!inner) continue;
+      const decoded = decodeURIComponent(inner[1]);
+      extractVideoUrls(decoded).forEach((u) => found.add(u));
+      extractFromText(decoded).forEach((u) => found.add(u));
+    } catch (e) { }
+  }
+  return [...found];
+}
+
 function walkJsonForVideoUrls(obj, out) {
   if (!out) out = new Set();
   if (obj === null || obj === undefined) return out;
@@ -660,11 +712,13 @@ async function httpSniff(fullUrl, targetUrl, timeout) {
   const timer = setTimeout(() => controller.abort(), timeout);
   const MAX_BYTES = 2 * 1024 * 1024;
 
-  // 从响应文本中提取候选视频地址（正则 + JSON / JSONP / JSON 数组）
+  // 从响应文本中提取候选视频地址（正则 + JSON / JSONP / JSON 数组 + 编码解码）
   function parseUrlsFromText(raw) {
     const urls = new Set();
     if (!raw || typeof raw !== 'string') return [...urls];
     extractVideoUrls(raw).forEach((u) => urls.add(u));
+    extractFromText(raw).forEach((u) => urls.add(u));
+    decodeEmbeddedVideoUrls(raw).forEach((u) => urls.add(u));
     try {
       const jsonMatch = raw.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
@@ -690,6 +744,21 @@ async function httpSniff(fullUrl, targetUrl, timeout) {
   }
 
   // 带代理的 fetch，手动跟随重定向（最多 5 跳），视频直链立即返回
+  const visited = new Set(); // 防环：同一嵌套地址只跟一次
+  // v2.5.1：从 HTML 里抠出嵌套的 iframe src / location 跳转（结算后进入真实播放器页）
+  const nestedTargets = (raw, base) => {
+    const out = [];
+    let m;
+    const re = /<iframe[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi;
+    while ((m = re.exec(raw)) !== null) {
+      try { const u = new URL(m[1], base).href; if (visited.has(u)) continue; visited.add(u); out.push(u); } catch (e) { }
+    }
+    const re2 = /(?:location\.href|window\.location|top\.location)\s*=\s*["']([^"']+)["']/gi;
+    while ((m = re2.exec(raw)) !== null) {
+      try { const u = new URL(m[1], base).href; if (visited.has(u)) continue; visited.add(u); out.push(u); } catch (e) { }
+    }
+    return out.slice(0, 3);
+  };
   const doFetch = async (url, depth) => {
     const res = await undiciFetch(url, {
       dispatcher: universalDispatcher,
@@ -732,7 +801,16 @@ async function httpSniff(fullUrl, targetUrl, timeout) {
     } else {
       raw = await res.text();
     }
-    return { urls: parseUrlsFromText(raw), rawLen: raw.length };
+    const parsed = parseUrlsFromText(raw);
+    // v2.5.1：本页无直链但存在嵌套 iframe/跳转时，HTTP 级跟进（≤3 层），免浏览器渲染即可命中
+    if (parsed.length === 0 && depth < 3) {
+      const nexts = nestedTargets(raw, url);
+      for (const nx of nexts) {
+        const r = await doFetch(nx, depth + 1);
+        if (r.urls && r.urls.length > 0) return r;
+      }
+    }
+    return { urls: parsed, rawLen: raw.length };
   };
 
   try {
