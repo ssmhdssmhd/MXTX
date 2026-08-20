@@ -5,6 +5,22 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.6.2] - 2026-08-20
+
+### 修复「更新后依赖缺失导致服务起不来」
+
+### Changed
+- 🔧 源码更新成功后新增**依赖自动同步**：对比新旧 `package.json` 的 `dependencies`，若有变化自动执行 `npm install` 同步 `node_modules`（跳过 puppeteer Chromium 下载，浏览器由 `chrome-linux64` 单独更新；仅生产依赖）
+- 🛡️ 依赖同步失败自动回滚：`npm install` 失败时恢复旧版本源码（含旧 `package.json`），保证 `node_modules` 与源码一致、服务重启必然可启动，用户可稍后重试更新
+- 🚀 依赖无变化时跳过 `npm install`，避免每次更新都慢扫 `node_modules`
+
+### Fixed
+- 🐛 修复「点击更新（源码/一键升级）→ 手动重启后报 Cannot find module 起不来」：新版本若新增/升级了依赖（如 v2.6.x 的 undici、puppeteer），旧 `node_modules` 与新 `package.json` 不匹配，重启即报模块缺失 → 现在更新流程末尾自动同步依赖，并在失败时回滚旧源码，服务必然能正常拉起
+
+### 验证
+- 语法检查 `node --check update.js` 通过
+- 依赖同步仅在 `package.json` 依赖变化时触发，失败路径回滚逻辑与既有「验证失败回滚」一致
+
 ## [2.6.1] - 2026-08-20
 
 ### 修复「更新后直接重启导致服务不启动」

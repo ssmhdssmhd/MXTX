@@ -610,6 +610,15 @@ async function updateSourceViaGit(log, onProgress) {
   }
   rmrf(protectedDir);
 
+  // 5.2 依赖同步（v2.6.2）：新版本若依赖有变则 npm install 同步 node_modules；
+  // 失败自动回滚旧源码，避免重启后 require 报错服务起不来
+  const dep = await syncDependencies(log);
+  if (!dep.ok) {
+    restoreSourceFiles(log);
+    log('依赖同步失败，已回滚到旧版本源码（可稍后重试更新）', 'err');
+    throw new Error('依赖同步失败，已自动回滚，请检查网络后重试更新');
+  }
+
   rmrf(backupSourceDir);
   log(`源码更新完成，新版本: ${remoteVersion}`);
   return { type: 'source', version: remoteVersion };
@@ -686,12 +695,90 @@ async function updateSourceViaZip(log, onProgress) {
     throw new Error('新源码验证失败，已自动回滚');
   }
 
+  // 依赖同步（v2.6.2）：新版本若依赖有变则 npm install 同步 node_modules；
+  // 失败自动回滚旧源码，避免重启后 require 报错服务起不来
+  const dep = await syncDependencies(log);
+  if (!dep.ok) {
+    restoreSourceFiles(log);
+    log('依赖同步失败，已回滚到旧版本源码（可稍后重试更新）', 'err');
+    throw new Error('依赖同步失败，已自动回滚，请检查网络后重试更新');
+  }
+
   rmrf(backupSourceDir);
   rmrf(extractDir);
   rmrf(zipPath);
 
   log(`源码更新完成，新版本: ${version}`);
   return { type: 'source', version };
+}
+
+// ========== 依赖同步（v2.6.2） ==========
+
+// 判断新旧 package.json 的 dependencies 是否一致（不一致才需要 npm install）
+function depsEqual(a, b) {
+  const ka = (a && a.dependencies) || {};
+  const kb = (b && b.dependencies) || {};
+  const keys = new Set([...Object.keys(ka), ...Object.keys(kb)]);
+  for (const name of keys) {
+    if ((ka[name] || '') !== (kb[name] || '')) return false;
+  }
+  return true;
+}
+
+// 更新后同步 node_modules：新版本若新增/升级了依赖，不执行 npm install
+// 会导致重启后 require 报「Cannot find module」而服务起不来。
+// 仅当新旧 package.json 依赖有变化时才执行；无备份时视为需要执行。
+async function syncDependencies(log) {
+  let newPkg = null;
+  try {
+    newPkg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'));
+  } catch (e) {
+    log('警告: 无法读取新版 package.json，跳过依赖同步');
+    return { changed: false, ok: true };
+  }
+
+  let oldPkg = null;
+  try {
+    oldPkg = JSON.parse(fs.readFileSync(path.join(BACKUP_DIR, 'source', 'package.json'), 'utf8'));
+  } catch (e) {
+    oldPkg = null;
+  }
+
+  if (oldPkg && depsEqual(oldPkg, newPkg)) {
+    log('依赖无变化，跳过依赖同步');
+    return { changed: false, ok: true };
+  }
+
+  log('检测到依赖变化，执行 npm install 同步 node_modules（视网络情况可能需要几分钟）...');
+  const env = Object.assign({}, process.env, {
+    // 浏览器由 chrome-linux64 单独更新，避免 puppeteer 升级时重复下载 Chromium
+    PUPPETEER_SKIP_DOWNLOAD: 'true',
+    NODE_ENV: process.env.NODE_ENV || 'production'
+  });
+  try {
+    execSync('npm install --no-audit --no-fund --loglevel=error', {
+      cwd: ROOT_DIR,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 10 * 60 * 1000,
+      env
+    });
+    log('依赖同步完成');
+    return { changed: true, ok: true };
+  } catch (e) {
+    log('依赖同步失败: ' + String(e.message || e).split('\n')[0], 'err');
+    return { changed: true, ok: false };
+  }
+}
+
+// 从备份目录恢复源码文件（更新失败 / 依赖同步失败时回滚，保证服务仍可启动）
+function restoreSourceFiles(log) {
+  const backupSourceDir = path.join(BACKUP_DIR, 'source');
+  for (const file of SOURCE_FILES) {
+    const backup = path.join(backupSourceDir, file);
+    if (fs.existsSync(backup)) {
+      fs.cpSync(backup, path.join(ROOT_DIR, file), { recursive: true });
+    }
+  }
 }
 
 module.exports = {
@@ -723,5 +810,6 @@ module.exports = {
   updateSource,
   updateSourceViaGit,
   updateSourceViaZip,
-  isGitRepo
+  isGitRepo,
+  syncDependencies
 };
