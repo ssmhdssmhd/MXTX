@@ -5,6 +5,22 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.6.1] - 2026-08-20
+
+### 修复「更新后直接重启导致服务不启动」
+
+### Changed
+- 🔧 更新完成后**不再自动重启**服务：`/admin/api/update` 在源码/一键升级成功后仅提示「请手动重启服务使新版本生效」，由用户手动重启（systemd / PM2 / nohup）使新版本代码生效
+- 🧹 移除 `update.js` 中已无调用的 `restartServer` / `isSystemdManaged` / `getPpid` 及 `child_process.spawn` 依赖（避免死代码与误导性「即将重启」提示）
+- 🖥️ 移除 `admin.html` 中已无用的「服务即将重启，页面将自动刷新」逻辑（后端不再下发 `restart:true`）
+
+### Fixed
+- 🐛 修复「点击更新后直接重启，服务起不来」：原自动重启逻辑在裸跑模式下**先 spawn 新进程、旧进程 1s 后硬退出**（`process.exit(0)`），期间端口被占用触发 EADDRINUSE、且浏览器池未优雅关闭留下孤儿 Chrome，导致新进程启动失败或 OOM 被杀 → 现在不再自动重启，手动重启走系统 SIGTERM → node.js 优雅退出（先释放端口、关闭浏览器池），服务必然能正常拉起
+
+### 验证
+- 语法检查 `node --check node.js` / `node --check update.js` 通过
+- 更新接口不再发送 `restart:true`，前端页面不再自动刷新
+
 ## [2.6.0] - 2026-08-20
 
 ### 命中率专项优化（网络检索 + 实测验证）

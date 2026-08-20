@@ -3052,12 +3052,13 @@ app.post('/admin/api/update', adminAuth, async (req, res) => {
       send({ type: 'done', ok: true, msg: '浏览器更新完成' });
     } else if (type === 'source') {
       const ret = await updater.updateSource(log, onProgress);
-      // 已是最新版本（skipped）时不重启服务，避免无意义重启 / 页面误刷新
+      // 已是最新版本（skipped）时不提示重启，避免误导
       if (ret && ret.skipped) {
         send({ type: 'done', ok: true, msg: `已是最新版本（v${updater.getCurrentVersion()}），无需更新` });
       } else {
-        send({ type: 'done', ok: true, msg: '源码更新完成，即将重启服务', restart: true });
-        setTimeout(() => updater.restartServer(log), 800);
+        // v2.6.1：更新后不再自动重启（自动重启易造成端口冲突/孤儿 Chrome 导致服务不启动），
+        // 由用户手动重启服务使新版本生效
+        send({ type: 'done', ok: true, msg: '源码更新完成，请手动重启服务使新版本生效' });
       }
     } else {
       await updater.updateBrowser(log, onProgress);
@@ -3065,8 +3066,7 @@ app.post('/admin/api/update', adminAuth, async (req, res) => {
       if (ret && ret.skipped) {
         send({ type: 'done', ok: true, msg: '浏览器更新完成（源码已是最新版本，无需更新）' });
       } else {
-        send({ type: 'done', ok: true, msg: '一键升级完成，即将重启服务', restart: true });
-        setTimeout(() => updater.restartServer(log), 800);
+        send({ type: 'done', ok: true, msg: '一键升级完成，请手动重启服务使新版本生效' });
       }
     }
   } catch (err) {

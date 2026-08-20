@@ -29,7 +29,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync, spawn } = require('child_process');
+const { execSync } = require('child_process');
 const { Agent, ProxyAgent, fetch, setGlobalDispatcher, getGlobalDispatcher } = require('undici');
 
 // ========== MX_ 变量环境工具函数 ==========
@@ -403,28 +403,6 @@ function execGit(args, timeout = 120000) {
   }).toString().trim();
 }
 
-// 当前进程的父进程 PID（用于判断是否由 systemd 托管）
-function getPpid() {
-  try {
-    const stat = fs.readFileSync('/proc/self/stat', 'utf8').toString().split(' ');
-    return parseInt(stat[3], 10) || 0;
-  } catch (e) {
-    return 0;
-  }
-}
-
-// 是否由 systemd 直接托管（父进程为 systemd，即 systemd service Type=simple）
-function isSystemdManaged() {
-  try {
-    const ppid = getPpid();
-    if (ppid <= 0) return false;
-    const pcomm = fs.readFileSync(`/proc/${ppid}/comm`, 'utf8').trim();
-    return pcomm === 'systemd';
-  } catch (e) {
-    return false;
-  }
-}
-
 function findDir(dir, name) {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const e of entries) {
@@ -716,38 +694,6 @@ async function updateSourceViaZip(log, onProgress) {
   return { type: 'source', version };
 }
 
-// ========== 重启服务 ==========
-
-function restartServer(log) {
-  log('正在重启服务...');
-
-  // 1. systemd 托管（父进程为 systemd）：直接退出，由 Restart=always 自动拉起，避免重复 spawn 抢端口
-  if (isSystemdManaged()) {
-    log('检测到 systemd 托管，退出后由 systemd 自动重启...');
-    setTimeout(() => process.exit(0), 500);
-    return;
-  }
-  // 2. PM2 托管（autorestart）：直接退出，由 PM2 自动重启
-  if (process.env.PM_ID !== undefined || process.env.NODE_APP_INSTANCE !== undefined) {
-    log('检测到 PM2 托管，退出后由 PM2 自动重启...');
-    setTimeout(() => process.exit(0), 500);
-    return;
-  }
-  // 3. 裸跑（前台/脚本/nohup 无守护）：spawn detached 新进程接管，再退出当前进程
-  log('未检测到守护进程，spawn 新进程接管服务...');
-  const mainFile = path.join(ROOT_DIR, 'node.js');
-  const logFile = path.join(ROOT_DIR, 'restart.log');
-  const out = fs.openSync(logFile, 'a');
-  const child = spawn(process.execPath, [mainFile], {
-    detached: true,
-    stdio: ['ignore', out, out]
-  });
-  child.unref();
-  setTimeout(() => {
-    process.exit(0);
-  }, 1000);
-}
-
 module.exports = {
   envS,
   GITHUB_OWNER,
@@ -777,6 +723,5 @@ module.exports = {
   updateSource,
   updateSourceViaGit,
   updateSourceViaZip,
-  isGitRepo,
-  restartServer
+  isGitRepo
 };

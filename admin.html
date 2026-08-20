@@ -731,7 +731,7 @@ async function doUpdate(type) {
             log(item.msg, item.ok ? 'ok' : 'err');
             if (item.ok) setProgress({ pct: 100, phase: '', received: 0, total: 0 });
             setTimeout(resetProgress, 3000);
-            if (item.restart) { log('服务即将重启，页面将自动刷新...', 'warn'); setTimeout(() => location.reload(), 2500); }
+            // v2.6.1：更新后不再自动重启，改由用户手动重启生效，故不再处理 restart 字段
           }
         } catch (e) { /* 忽略非 JSON 行 */ }
       });
