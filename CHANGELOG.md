@@ -23,6 +23,7 @@
   - 根因：`new String()` 是对象，`Map.get/set` 按引用比较，导致每次请求都生成新的键，`providerStats` 里 `byDomain` / `failReasons` 记忆与熔断状态永远匹配不到旧数据，`provider-score.json` 不断累积重复条目
   - 修复：排序函数改为返回纯字符串；`/admin/api/rules` 的 `globalTop5` 改用 `providerScore(p)` 计算，删除 `_rankScore`/`_broken` 依赖 → 平台记忆、失败原因、熔断跨请求正确复用，统计文件无重复
 - ✨ `/sniff` 与 `/admin/api/sniff-stream` 新增 `official=0` 参数：跳过官方直连、强制跑全部 18 家 Provider，用于失败原因分析与第三方接口调试（腾讯等官方平台解析始终优先，默认不受影响）
+- 🐛 修复管理后台页脚版本显示陈旧：页脚 `v2.4.8` 硬编码改为动态读取 `/admin/api/status` 的当前版本，随实际版本自动更新，不再落后于最新版
 
 ### 验证
 - 官方解析优先：腾讯 m.v.qq.com 链接 → `qq-official` 命中 **4 个 mp4 直链**，SSE `count: 4`（不再是「命中 0 个 URL」）

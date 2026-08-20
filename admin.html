@@ -347,7 +347,7 @@
   <!-- 日志 -->
   <div class="log-box" id="logBox"><span class="log-time">[系统]</span> 等待操作...</div>
 
-  <div class="footer">超级嗅探 v2.4.8 · 在线更新系统（稳定版 / 先行版）</div>
+  <div class="footer">超级嗅探 <span id="footerVersion">v-</span> · 在线更新系统（稳定版 / 先行版）</div>
 </div>
 
 <script>
@@ -437,6 +437,7 @@ async function loadStatus() {
     document.getElementById('stChrome').textContent = data.chromeVersion;
     document.getElementById('stVersion').textContent = 'v' + data.version;
     document.getElementById('versionBadge').textContent = 'v' + data.version;
+    document.getElementById('footerVersion').textContent = 'v' + data.version;
     setBadge(document.getElementById('serviceBadge'), data.service === '运行中' ? '运行中' : '异常', data.service === '运行中' ? 'online' : 'offline');
     document.getElementById('browserCurrent').textContent = data.chromeVersion;
     document.getElementById('sourceCurrent').textContent = 'v' + data.version;
